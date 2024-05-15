@@ -118,10 +118,13 @@ function get_fifo_width return integer
 	end function;	
 
 
+--signal deb_cc : integer := 0;
+
 constant SIZE_OF_SG_RECORD_STAUS	: std_logic_vector(13 downto 0) := "00000000001000"; -- 8 bytes 
 constant SIZE_OF_SG_DESCRIPTOR 		: std_logic_vector(13 downto 0) := "00000000100000";
 constant GET_DESC_REQ				: std_logic_vector(7 downto 0) := x"01";
 constant GET_RECORD_REQ				: std_logic_vector(7 downto 0) := x"02";
+constant GET_STATUS_WORD_REQ		: std_logic_vector(7 downto 0) := x"08";
 constant BACKOFF_TIMEOUT 			: integer := 31250;
 constant RECORD_SEGMENT_SIZE		: integer := 128;
 
@@ -136,15 +139,17 @@ end function;
 
 type stat_sm is
 (
-	SI_STATE_IDLE,
-	SI_STATE_DESC_RDY,
-	SI_STATE_STOP,
-	SI_STATE_BACKOFF,
-	SI_STATE_GET_DESCRIPTOR,
-	SI_STATE_WAIT_FOR_DESCRIPTOR,								
-	SI_STATE_GET_NEXT_RECORDS_BURST,	
-	SI_STATE_WAIT_FOR_REQ,
-	SI_STATE_WAIT_FOR_STATUS_DONE,
+	SI_STATE_IDLE,		--0
+	SI_STATE_DESC_RDY, --3
+	SI_STATE_STOP, 
+	SI_STATE_BACKOFF, --4
+	SI_STATE_GET_DESCRIPTOR, --1
+	SI_STATE_WAIT_FOR_DESCRIPTOR, --2								
+	SI_STATE_GET_NEXT_RECORDS_BURST,	--5
+	SI_STATE_WAIT_FOR_REQ,  --6
+	SI_STATE_WAIT_FOR_STATUS_DONE, --8
+	SI_STATE_DO_STATUS_READBACK, --9
+	SI_STATE_WAIT_FOR_STATUS_READBACK, --A
 	SI_STATE_MSIX_ARBIT,
 	SI_STATE_WAIT_OF_RECORD_GATE,	
 	SI_STATE_MSIX_MWr,
@@ -202,6 +207,7 @@ signal sg_descriptor0			: std_logic_vector((8*32)-1 downto 0);
 signal sg_desc_wrtie_index		: integer range 0 to 3;
 
 signal desc_valid				: std_logic;
+signal desc_valid_d				: std_logic;
 
 signal sg_generate_interrupt	: std_logic;
 signal sg_next_desc_address 	: std_logic_vector(63 downto 0);
@@ -260,13 +266,16 @@ signal rx_data_d 				: std_logic_vector(PCIE_CORE_DATA_WIDTH-1 downto 0);
 signal rx_done_d				: std_logic;
 signal rx_be_d					: std_logic_vector((PCIE_CORE_DATA_WIDTH/8)-1 downto 0);
 
+signal status_qword_readback	: std_logic_vector(63 downto 0);
+
 type DESC_LOW_ARRAY is ARRAY (0 to 9) of std_logic_vector(31 downto 0);
 signal cheack_descriptor_sequance : std_logic;	
 signal curr_desc_low : std_logic_vector(31 downto 0);
+signal curr_desc_addr : std_logic_vector(63 downto 0);
 signal desc_low : DESC_LOW_ARRAY;
 signal cur_desc_index : integer range 0 to 9;
 signal desc_seqance_error : std_logic;
-
+signal check_status_readback : std_logic;
 
 signal dbg_reg : std_logic_vector(3 downto 0);
 
@@ -275,11 +284,32 @@ attribute keep: string;
 attribute keep of dbg_reg : signal is "true";
 attribute keep of tx_req_int : signal is "true";
 
-attribute keep of cheack_descriptor_sequance : signal is "true";
-attribute keep of curr_desc_low : signal is "true";
-attribute keep of desc_low : signal is "true";
-attribute keep of cur_desc_index : signal is "true";
-attribute keep of desc_seqance_error : signal is "true";
+attribute keep of cheack_descriptor_sequance 	: signal is "true";
+attribute keep of curr_desc_low 				: signal is "true";
+attribute keep of desc_low 						: signal is "true";
+attribute keep of cur_desc_index 				: signal is "true";
+attribute keep of desc_seqance_error 			: signal is "true";
+attribute keep of check_status_readback 		: signal is "true";
+attribute keep of context_in_d 					: signal is "true";
+attribute keep of rx_active_d 					: signal is "true";
+attribute keep of tx_sys_addr_int				: signal is "true"; 	
+attribute keep of tx_burst_size_int 			: signal is "true";	
+attribute keep of tx_dir_int 					: signal is "true";	
+attribute keep of tx_context_int 				: signal is "true";	
+attribute keep of transfer_index 				: signal is "true";	
+attribute keep of status_addr_int				: signal is "true";
+attribute keep of sg_descriptor0				: signal is "true";
+
+attribute keep of sg_next_desc_address 			: signal is "true";
+attribute keep of sg_active						: signal is "true";
+attribute keep of sg_last_desc					: signal is "true";
+attribute keep of sg_generate_interrupt			: signal is "true";
+attribute keep of sg_rec_buffer_size			: signal is "true";
+attribute keep of sg_rec_list_address 			: signal is "true";
+attribute keep of sg_cyclic						: signal is "true";
+attribute keep of sg_desc_signiture				: signal is "true";
+attribute keep of sg_status_addr				: signal is "true";
+
 
 
 begin
@@ -296,11 +326,13 @@ process(clk_in)
                 when SI_STATE_WAIT_FOR_DESCRIPTOR		=> dbg_reg <= "0110";								
                 when SI_STATE_GET_NEXT_RECORDS_BURST	=> dbg_reg <= "0111";	    
                 when SI_STATE_WAIT_FOR_REQ				=> dbg_reg <= "1000";               
-                when SI_STATE_WAIT_FOR_STATUS_DONE		=> dbg_reg <= "1001";       
-                when SI_STATE_MSIX_ARBIT				=> dbg_reg <= "1010";                 
-                when SI_STATE_WAIT_OF_RECORD_GATE		=> dbg_reg <= "1011";	       
-                when SI_STATE_MSIX_MWr					=> dbg_reg <= "1100";                   
-                when SI_STATE_MSIX_MWr_Done          	=> dbg_reg <= "1101";
+                when SI_STATE_WAIT_FOR_STATUS_DONE		=> dbg_reg <= "1001";
+				when SI_STATE_DO_STATUS_READBACK		=> dbg_reg <= "1010";	
+				when SI_STATE_WAIT_FOR_STATUS_READBACK	=> dbg_reg <= "1011";
+                when SI_STATE_MSIX_ARBIT				=> dbg_reg <= "1100";                 
+                when SI_STATE_WAIT_OF_RECORD_GATE		=> dbg_reg <= "1101";	       
+                when SI_STATE_MSIX_MWr					=> dbg_reg <= "1110";                   
+                when SI_STATE_MSIX_MWr_Done          	=> dbg_reg <= "1111";
                 when others 							=> dbg_reg <= "0000";    				
                 end case;
 		end if;
@@ -313,7 +345,6 @@ process(clk_in)
 			gen_status_req_d <= gen_status_req;
 		end if;
 	end process;				
-    
 	
 			
 
@@ -346,11 +377,16 @@ process(clk_in)
 				rec_fifo_clr_n <= '0';	 
 				wait_cnt <= (others => '0');
 				cheack_descriptor_sequance <= '0';
-				
+				desc_seqance_error <= '0';
 				curr_desc_low <= (others => '0');
+				curr_desc_addr <= (others => '0');
+				desc_valid_d	<= '0';
 			else
+				desc_valid_d <= desc_valid;
 				curr_desc_low <= curr_desc_low;
+				curr_desc_addr <= curr_desc_addr;
 				cheack_descriptor_sequance <= '0';
+				desc_seqance_error <= '0';
 				desc_rdy_sig <= '0';
 				rec_fifo_clr_n <= '1';
 				tx_req_int <= '0';
@@ -400,6 +436,7 @@ process(clk_in)
 							wait_cnt <= (others => '0');
 							
 							curr_desc_low <= tx_sys_addr_int(31 downto 0);
+							curr_desc_addr <= tx_sys_addr_int;
 						end if;	
 					when SI_STATE_WAIT_FOR_DESCRIPTOR =>
 						rec_fifo_clr_n <= '0';
@@ -413,11 +450,14 @@ process(clk_in)
 	
 						if stop_req = '1' then
 							stat_int_state <= SI_STATE_STOP;
-						elsif sg_active = '0' then
+						elsif sg_descriptor0(97) = '0' then
 							
 							stat_int_state <= SI_STATE_BACKOFF;
 						else
 							desc_valid <= '1';
+						end if;
+
+						if desc_valid_d = '1' then
 							cheack_descriptor_sequance <= '1';
 							stat_int_state <= SI_STATE_GET_NEXT_RECORDS_BURST;
 							next_rec_seg_addr <= sg_rec_list_address;
@@ -472,47 +512,82 @@ process(clk_in)
 						elsif gen_status_req = '1' then
 							records_size_left <= (others => '0');
 							rec_fifo_clr_n <= '0';
-							status_addr_int	 	<= sg_status_addr;
+							status_addr_int	 	<= curr_desc_addr+8; --sg_status_addr;
 							status_req_int		<= '1';
-							 
+							
 							if SWAP_ENDIAN = 1 then
-								--status_qword_int <= "000" & '0' & x"1000000" & endigan_swap(transfer_count);
 								status_qword_int <= "0000" & x"100" & transfer_index(3 downto 0) & transfer_index(7 downto 4) & transfer_index(11 downto 8) & x"0" & endigan_swap(transfer_count);
 							else
 								status_qword_int <= transfer_index & x"000" & "000" & '0' & x"1" & transfer_count;
 							end if;
-						    transfer_index <= transfer_index+1;
-							stat_int_state <= SI_STATE_WAIT_FOR_STATUS_DONE;
+						    --transfer_index <= transfer_index+1;
+	 						stat_int_state <= SI_STATE_WAIT_FOR_STATUS_DONE;
 							
 						elsif tx_last_in = '0' and half_fifo_sig = '1' then -- ignor half_fifo_sig if we got tx_last_in
 							stat_int_state <= SI_STATE_GET_NEXT_RECORDS_BURST;
 						end if;
-						
+
 					when SI_STATE_WAIT_FOR_STATUS_DONE =>
 						rec_fifo_clr_n <= '0';	
 						status_req_int		<= status_req_int;
 						status_qword_int	<= status_qword_int;
 						status_addr_int	 	<= status_addr_int;	
-										
+						
 						if status_ack = '1' then
+							stat_int_state	 	<= SI_STATE_DO_STATUS_READBACK;
+							tx_sys_addr_int 	<= status_addr_int; 	   
+							tx_burst_size_int 	<= "00000000001000"; 	 
+							tx_dir_int 			<= '0'; 			         
+							tx_context_int 		<= x"0000" & GET_STATUS_WORD_REQ & conv_std_logic_vector(CHAN_NUM,8); 		   
+						end if;
+						
+					when SI_STATE_DO_STATUS_READBACK =>
+						tx_req_int <= '1';
+						rec_fifo_clr_n <= '0';
+						tx_sys_addr_int 	<= tx_sys_addr_int; 	
+						tx_burst_size_int 	<= tx_burst_size_int; 	
+						tx_dir_int 			<= tx_dir_int; 			
+						tx_context_int 		<= tx_context_int; 		 		   
+						
+						if tx_grnt = '1' then
+							req_active	<= '1';
+						
+							stat_int_state <= SI_STATE_WAIT_FOR_STATUS_READBACK;
+							wait_cnt <= (others => '0');
+						end if;
+						
+					when SI_STATE_WAIT_FOR_STATUS_READBACK =>
+					
+						req_active			<= '1';
+						status_req_int		<= status_req_int;
+						status_qword_int	<= status_qword_int;
+						status_addr_int	 	<= status_addr_int;	
+					
+						if rx_done_d = '1' and status_qword_readback = status_qword_int then
 							status_req_int		<= '0';
 							status_qword_int	<= (others => '0');
 							status_addr_int	 	<= (others => '0');
 						end if;
-			
-						
-						if sg_generate_interrupt = '1' and msix_enabled = '1'  and status_ack = '1' then
+				
+						if sg_generate_interrupt = '1' and msix_enabled = '1'  and check_status_readback = '1' and status_qword_readback = status_qword_int then
 							tx_sys_addr_int <= msix_msg_addr;
 							tx_burst_size_int <= "00000000000100"; -- 1 DW
 							tx_dir_int <= '1';
 							stat_int_state <= SI_STATE_MSIX_ARBIT;
 							tx_req_int <= '1';
 							do_interrupt_int <= '1';
-						elsif(sg_generate_interrupt = '1' and status_ack = '1')then  -- generate interrupt before continue the next packet
+							transfer_index <= transfer_index+1;
+						elsif(sg_generate_interrupt = '1' and check_status_readback = '1' and status_qword_readback = status_qword_int)then  -- generate interrupt before continue the next packet
 						    do_interrupt_int <= '1';
 							stat_int_state <= SI_STATE_WAIT_OF_RECORD_GATE;
-						elsif(status_ack = '1') then  -- no interrupt - start with next descriptor
+							transfer_index <= transfer_index+1;
+						elsif(check_status_readback = '1' and status_qword_readback = status_qword_int) then  -- no interrupt - start with next descriptor
 							stat_int_state <= SI_STATE_WAIT_OF_RECORD_GATE;
+							transfer_index <= transfer_index+1;
+						elsif (check_status_readback = '1')	then
+							status_req_int	<= '1';
+							desc_seqance_error <= '1';
+						    stat_int_state <= SI_STATE_WAIT_FOR_STATUS_DONE;						
 						end if;
 					
 					when SI_STATE_MSIX_ARBIT =>
@@ -906,8 +981,46 @@ end generate;
 
   end generate;	
 
+
+
+--    stat_word_rd_in : process(clk_in)
+--   	begin
+-- 		if rising_edge(clk_in) then
+-- 			if rstn = '0' then
+--				deb_cc <= 0;	
+--				status_qword_readback <= (others => '0');
+--			elsif(context_in_d(11 downto 8) = "1000"  and rx_active_d = '1' and deb_cc = 10) then	
+--				status_qword_readback <= (others => '0');
+--				deb_cc <= deb_cc+1;
+--			elsif context_in_d(11 downto 8) = "1000"  and rx_active_d = '1'  then
+--				status_qword_readback <= rx_data_d(63 downto 0);
+--				deb_cc <= deb_cc+1;
+--			end if;
+--		end if;
+--	end process;
+
+    stat_word_rd_in : process(clk_in)
+   	begin
+ 		if rising_edge(clk_in) then
+ 			if rstn = '0' then
+				check_status_readback <= '0';
+				status_qword_readback <= (others => '0');
+			elsif context_in_d(11 downto 8) = "1000"  and rx_active_d = '1'  then
+				status_qword_readback <= rx_data_d(63 downto 0);
+				check_status_readback <= '1';
+			else
+				status_qword_readback <= status_qword_readback;
+				check_status_readback <= '0';
+			end if;
+		end if;
+	end process;
+
+
+
   	gne_128: if PCIE_CORE_DATA_WIDTH = 128 generate
  	
+	
+	
     desc_in : process(clk_in)
    	begin
  		if rising_edge(clk_in) then
@@ -1016,15 +1129,48 @@ end generate;
 	--	W6	255-224 	+				  				   		   Reserved		    									+
 	--			  		+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 
-	sg_next_desc_address 	<= sg_descriptor0(63 downto 2) & "00";
-	sg_active				<= sg_descriptor0(97);
-	sg_last_desc			<= sg_descriptor0(0); 
-	sg_generate_interrupt	<= sg_descriptor0(1);
-	sg_rec_buffer_size		<= sg_descriptor0(159 downto 128);
-	sg_rec_list_address 	<= sg_descriptor0(223 downto 162) & "00";
-	sg_cyclic				<= sg_descriptor0(160);
-	sg_desc_signiture		<= sg_descriptor0(sg_descriptor0'high downto sg_descriptor0'high-31);
-	sg_status_addr			<= sg_descriptor0(255 downto 224) & sg_descriptor0(95 downto 64);
+
+   	process(clk_in)
+   	begin
+ 		if rising_edge(clk_in) then
+ 			if(rstn = '0')then
+				sg_next_desc_address 	<= (others => '0');
+				sg_active				<= '0';
+				sg_last_desc			<= '0';
+				sg_generate_interrupt	<= '0';
+				sg_rec_buffer_size		<= (others => '0');
+				sg_rec_list_address 	<= (others => '0');
+				sg_cyclic				<= '0';
+				sg_desc_signiture		<= (others => '0');
+				sg_status_addr			<= (others => '0');
+ 			else
+
+				sg_next_desc_address 	<= sg_next_desc_address;
+				sg_active				<= sg_active;
+				sg_last_desc			<= sg_last_desc;
+				sg_generate_interrupt	<= sg_generate_interrupt;
+				sg_rec_buffer_size		<= sg_rec_buffer_size;
+				sg_rec_list_address 	<= sg_rec_list_address;
+				sg_cyclic				<= sg_cyclic;
+				sg_desc_signiture		<= sg_desc_signiture;
+				sg_status_addr			<= sg_status_addr;
+
+ 				if desc_valid = '1' then
+					sg_next_desc_address 	<= sg_descriptor0(63 downto 2) & "00";
+					sg_active				<= sg_descriptor0(97);
+					sg_last_desc			<= sg_descriptor0(0); 
+					sg_generate_interrupt	<= sg_descriptor0(1);
+					sg_rec_buffer_size		<= sg_descriptor0(159 downto 128);
+					sg_rec_list_address 	<= sg_descriptor0(223 downto 162) & "00";
+					sg_cyclic				<= sg_descriptor0(160);
+					sg_desc_signiture		<= sg_descriptor0(sg_descriptor0'high downto sg_descriptor0'high-31);
+					sg_status_addr			<= sg_descriptor0(255 downto 224) & sg_descriptor0(95 downto 64);
+ 				end if;
+ 			end if;
+ 		end if;
+ 	end process;
+
+
 
 	
 	tx_req <= tx_req_int;
@@ -1063,12 +1209,9 @@ end generate;
  		if rising_edge(clk_in) then
  			if rstn = '0' then
                 cur_desc_index <= 0;
-				desc_seqance_error <= '0';
+				
  			else
-				desc_seqance_error <= '0';
-				if cheack_descriptor_sequance = '1' and curr_desc_low /= desc_low(cur_desc_index) then
-					desc_seqance_error <= '1';
-				end if;
+				
 				
 				if cheack_descriptor_sequance = '1' and cur_desc_index = 9 then
 					cur_desc_index <= 0;
