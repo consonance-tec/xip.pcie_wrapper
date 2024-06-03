@@ -48,7 +48,7 @@ generic
 	MAX_USER_RX_REQUEST_SIZE 	: integer 	:= 4096; --256; --4096;
 	NUM_NUM_OF_USER_RX_PENDINNG_REQUEST : integer := 2;
 	DIRECTION 					: std_logic := '1';
-	RGDMA_SUPPROT				: std_logic := '0'
+	STALL_ON_EOP				: integer := 0
 );
 Port ( 
 	-- system i/f
@@ -141,6 +141,7 @@ Port (
 	
 	bmi_tx_data_rdy_o			: out  	std_logic;
 	bmi_transfer_done_o 		: out  	std_logic;
+		
 	
 	tx_error_i					: in 	std_logic;
 
@@ -154,6 +155,20 @@ Port (
 	dbg0_reg_0					: out  std_logic_vector(4 downto 0);
 	
 	dbg_word_o					: out  std_logic_vector(255 downto 0)
+	
+;
+	
+	
+	desc_low_0				: in std_logic_vector(31 downto 0);
+	desc_low_1				: in std_logic_vector(31 downto 0);
+	desc_low_2				: in std_logic_vector(31 downto 0);
+	desc_low_3				: in std_logic_vector(31 downto 0);
+	desc_low_4				: in std_logic_vector(31 downto 0);
+	desc_low_5				: in std_logic_vector(31 downto 0);
+	desc_low_6				: in std_logic_vector(31 downto 0);
+	desc_low_7				: in std_logic_vector(31 downto 0);
+	desc_low_8				: in std_logic_vector(31 downto 0);
+	desc_low_9				: in std_logic_vector(31 downto 0)	
 );
 end c2s_sg_bm;
 
@@ -282,6 +297,7 @@ port
 	tx_burst_size           : out std_logic_vector(13 downto 0);
 	tx_dir                  : out std_logic;
 	tx_context				: out std_logic_vector(31 downto 0);
+	tx_last_in				: in std_logic;
 
 	req_active				: out std_logic;
 	
@@ -289,8 +305,19 @@ port
   	rx_data    	  			: in  std_logic_vector(PCIE_CORE_DATA_WIDTH-1 downto 0);
 	rx_done					: in  std_logic;
 	rx_active				: in  std_logic;
-	bm_rx_last_in_burst 	: in  std_logic;
-	rx_be_i					: in  std_logic_vector((PCIE_CORE_DATA_WIDTH/8)-1 downto 0)	
+	rx_be_i					: in  std_logic_vector((PCIE_CORE_DATA_WIDTH/8)-1 downto 0);
+
+	dbg_out					: out std_logic_vector(3 downto 0);
+	desc_low_0				: in std_logic_vector(31 downto 0);
+	desc_low_1				: in std_logic_vector(31 downto 0);
+	desc_low_2				: in std_logic_vector(31 downto 0);
+	desc_low_3				: in std_logic_vector(31 downto 0);
+	desc_low_4				: in std_logic_vector(31 downto 0);
+	desc_low_5				: in std_logic_vector(31 downto 0);
+	desc_low_6				: in std_logic_vector(31 downto 0);
+	desc_low_7				: in std_logic_vector(31 downto 0);
+	desc_low_8				: in std_logic_vector(31 downto 0);
+	desc_low_9				: in std_logic_vector(31 downto 0)	
 	
 	
 );
@@ -327,20 +354,10 @@ type state_type is
 	SG_WAIT_FOR_CLI_ZERO,
 	SG_STATE_WAIT_CLI_PRE_STATUS,
 	SG_READ_NEX_RECORD,
-	SG_PREPARE_NEXT_RECORD_SEGMENT,
-	SG_WAIT_FOR_DATA_IN_DONE,
-	SG_DATA_TRANSFER_RDY,
-	SG_WAIT_FOR_FRONT_BUFF_EMPTY,
-	SG_WAIT_FOR_RX_RDY,
 	SG_DATA_ARBIT_REQ,
-	SG_DATA_TRANSFER,
 	SG_STATE_STATUS_0,
 	SG_STATE_STOP,
-	SG_WAIT_FOR_DATA_TRANSFER,
-	SG_WAIT_FOR_GNT,
-	SG_OUT_ADDR_INC,
-	SG_WAIT_FOR_GRNAT_SIG,
-	SG_WAIT_ON_RX_USER_BUFFER
+	SG_WAIT_FOR_GNT
 );
 signal sm_state : state_type;
 signal sm_next_state : state_type;
@@ -485,9 +502,9 @@ signal sg_rec					: std_logic_vector(95 downto 0);
 signal sg_rec_buffer_size 		: std_logic_vector(31 downto 0);
 signal sg_rec_list_address		: std_logic_vector(63 downto 0);
 signal sg_last_record			: std_logic;
-signal sg_first_record			: std_logic;
-signal first_record_sig			: std_logic;
-signal first_rec				: std_logic;
+--signal sg_first_record			: std_logic;
+--signal first_record_sig			: std_logic;
+--signal first_rec				: std_logic;
 
 
 
@@ -521,6 +538,7 @@ signal rx_data_rdy_d			: std_logic;
 signal tx_data_rdy				: std_logic;
 signal do_interrupt				: std_logic;
 
+signal pending_burst_cnt 		: integer range 0 to 1024;
 
 signal dbg_out						: std_logic;
 signal dbg_out1					: std_logic;
@@ -552,35 +570,38 @@ signal curr_tx_burst_len  		: std_logic_vector(13 downto 0);
 signal tx_burst_rdy				: std_logic;			
 signal record_fifo_reset_n		: std_logic;
 
+
+signal tx_burst_rdy_cnt				: integer := 0;			
+
 signal transfer_count_fixed		: std_logic_vector(31 downto 0);
 
 signal unallocated_user_fifo_spacce	: std_logic_vector(curr_tx_burst_len'high +1 - LOG2((PCIE_CORE_DATA_WIDTH/8))  downto 0);
 
 
-signal 	user_data_rx_fifo_wc	: std_logic_vector(31 downto 0);
-signal 	user_data_rx_fifo_Wd	: std_logic_vector(log2(PCIE_CORE_DATA_WIDTH/8)+PCIE_CORE_DATA_WIDTH+1 downto 0);
-signal 	user_data_rx_fifo_WE	: std_logic;
-signal 	user_data_rx_fifo_Full	: std_logic;
-signal 	user_data_rx_fifo_Rd	: std_logic_vector(log2(PCIE_CORE_DATA_WIDTH/8)+PCIE_CORE_DATA_WIDTH+1 downto 0);
-signal 	user_data_rx_fifo_RE	: std_logic;
-signal 	user_data_rx_fifo_Dav	: std_logic;
-signal 	user_data_rx_fifo_Empty	: std_logic;
+--signal 	user_data_rx_fifo_wc	: std_logic_vector(31 downto 0);
+--signal 	user_data_rx_fifo_Wd	: std_logic_vector(log2(PCIE_CORE_DATA_WIDTH/8)+PCIE_CORE_DATA_WIDTH+1 downto 0);
+--signal 	user_data_rx_fifo_WE	: std_logic;
+--signal 	user_data_rx_fifo_Full	: std_logic;
+--signal 	user_data_rx_fifo_Rd	: std_logic_vector(log2(PCIE_CORE_DATA_WIDTH/8)+PCIE_CORE_DATA_WIDTH+1 downto 0);
+--signal 	user_data_rx_fifo_RE	: std_logic;
+--signal 	user_data_rx_fifo_Dav	: std_logic;
+--signal 	user_data_rx_fifo_Empty	: std_logic;
 
-signal 	user_last_write_sig		: std_logic;
+--signal 	user_last_write_sig		: std_logic;
  
-signal  user_write				: std_logic;
-signal  user_write_d			: std_logic;
-signal 	bmi_rx_data_valid		: std_logic;
-signal 	bmi_rx_data				: std_logic_vector(PCIE_CORE_DATA_WIDTH-1 downto 0);
-signal 	bmi_rx_last				: std_logic;
-signal 	bmi_rx_be				: std_logic_vector(log2(PCIE_CORE_DATA_WIDTH/8)-1 downto 0);
-signal  bmi_rx_first			: std_logic;
-signal 	bmi_rx_first_sig        : std_logic;
-signal  bmi_rx_first_d          : std_logic;
+--signal  user_write				: std_logic;
+--signal  user_write_d			: std_logic;
+--signal 	bmi_rx_data_valid		: std_logic;
+--signal 	bmi_rx_data				: std_logic_vector(PCIE_CORE_DATA_WIDTH-1 downto 0);
+--signal 	bmi_rx_last				: std_logic;
+--signal 	bmi_rx_be				: std_logic_vector(log2(PCIE_CORE_DATA_WIDTH/8)-1 downto 0);
+--signal  bmi_rx_first			: std_logic;
+--signal 	bmi_rx_first_sig        : std_logic;
+--signal  bmi_rx_first_d          : std_logic;
 
 
 signal stall_tx					: std_logic;
-signal stall_tx_sfr				: std_logic_vector(2 downto 0);
+signal stall_tx_sfr				: std_logic_vector(0 downto 0);
 signal stall_latch				: std_logic;
 signal stall_sig				: std_logic;
 
@@ -622,13 +643,20 @@ signal prev_desc_req : std_logic_vector(63 downto 0);
 signal flush_out_buffers : std_logic;
 signal flush_out  : std_logic;
 
-signal last_cycle_in_transfer : std_logic;
+signal stat_int_dbg_out					: std_logic_vector(3 downto 0);
+--signal last_cycle_in_transfer : std_logic;
 
-signal next_user_data_rx_fifo_Wd : std_logic_vector(31 downto 0);
+--signal next_user_data_rx_fifo_Wd : std_logic_vector(31 downto 0);
+
+signal local_reset_n : std_logic;
+
+attribute preserve_syn_only : boolean;
+
+attribute preserve_syn_only of local_reset_n : signal is true;
 
 attribute keep: string;
 
-attribute keep of user_last_write_sig : signal is "ture"; 
+attribute keep of curr_state_cnt : signal is "true";
 attribute keep of dbg0_reg : signal is "true";
 attribute keep of dbg_out : signal is "true";
 attribute keep of bmi_tx_data_valid : signal IS "true";
@@ -650,6 +678,12 @@ attribute syn_keep of rec_to_fifo_d: signal is true;
 
 begin
 
+  process(clk)
+  begin
+  	if rising_edge(clk) then
+		local_reset_n <= reset_n_i;
+	end if;
+ end process;
 
 
 
@@ -665,21 +699,10 @@ begin
 				when SG_WAIT_FOR_CLI_ZERO				=> dbg0_reg <= "000101";
 				when SG_STATE_WAIT_CLI_PRE_STATUS		=> dbg0_reg <= "000110"; 
 				when SG_READ_NEX_RECORD					=> dbg0_reg <= "000111";
-				when SG_PREPARE_NEXT_RECORD_SEGMENT 	=> dbg0_reg <= "001000";
-				when SG_WAIT_FOR_FRONT_BUFF_EMPTY		=> dbg0_reg <= "001001"; 
-				when SG_WAIT_FOR_DATA_IN_DONE			=> dbg0_reg <= "001011"; 
-				when SG_DATA_TRANSFER_RDY				=> dbg0_reg <= "001100";
-				when SG_WAIT_FOR_RX_RDY					=> dbg0_reg <= "001101";
 				when SG_DATA_ARBIT_REQ					=> dbg0_reg <= "001110";
-				when SG_DATA_TRANSFER					=> dbg0_reg <= "001111";
-				--when SG_STATE_STATUS_ARBIT_REQ			=> dbg0_reg <= "010000";
 				when SG_STATE_STATUS_0					=> dbg0_reg <= "010001";	
 				when SG_STATE_STOP						=> dbg0_reg <= "010011";
-				when SG_WAIT_FOR_DATA_TRANSFER			=> dbg0_reg <= "010101";
 				when SG_WAIT_FOR_GNT					=> dbg0_reg <= "011110";
-				when SG_OUT_ADDR_INC			   		=> dbg0_reg <= "011111";
-				when SG_WAIT_FOR_GRNAT_SIG				=> dbg0_reg <= "100010";
-				when SG_WAIT_ON_RX_USER_BUFFER			=> dbg0_reg <= "100011";
 				
 			end case;
 		end if;
@@ -693,135 +716,118 @@ begin
   end process;
     
   
-  user_fifo_rx_data_rdy <= '1' 	when conv_integer(unallocated_user_fifo_spacce) > 0 else '0';
+--  user_fifo_rx_data_rdy <= '1' 	when conv_integer(unallocated_user_fifo_spacce) > 0 else '0';
   
   
   
   
 
-SWAP_USER_DATA_ON: if SWAP_ENDIAN = 1 generate
-  process(clk)
-  begin
-  	if rising_edge(clk) then
-  		for i in 0 to PCIE_CORE_DATA_WIDTH/32-1 loop 
-			rx_data_d1(i*32+31 downto i*32)	<=  rx_data_d(i*32+7 downto i*32) & rx_data_d(i*32+15 downto i*32+8) & rx_data_d(i*32+23 downto i*32+16) & rx_data_d(i*32+31 downto i*32+24); 
-		end loop;
-	end if;
-  end process;
-end generate;
-  
-SWAP_USER_DATA_OFF: if SWAP_ENDIAN = 0 generate
-  process(clk)
-  begin
-  	if rising_edge(clk) then
-  		rx_data_d1	<=  rx_data_d; 
-		
-	end if;
-  end process;
-end generate;
+--SWAP_USER_DATA_ON: if SWAP_ENDIAN = 1 generate
+--  process(clk)
+--  begin
+--  	if rising_edge(clk) then
+--  		for i in 0 to PCIE_CORE_DATA_WIDTH/32-1 loop 
+--			rx_data_d1(i*32+31 downto i*32)	<=  rx_data_d(i*32+7 downto i*32) & rx_data_d(i*32+15 downto i*32+8) & rx_data_d(i*32+23 downto i*32+16) & rx_data_d(i*32+31 downto i*32+24); 
+--		end loop;
+--	end if;
+--  end process;
+--end generate;
+--  
+--SWAP_USER_DATA_OFF: if SWAP_ENDIAN = 0 generate
+--  process(clk)
+--  begin
+--  	if rising_edge(clk) then
+--  		rx_data_d1	<=  rx_data_d; 
+--		
+--	end if;
+--  end process;
+--end generate;
 
   
-	process(clk)
-	begin
-		if rising_edge(clk) then
-			if reset_n_i = '0' then
-				 unallocated_user_fifo_spacce <= conv_std_logic_vector(FIFO_DEPTH,unallocated_user_fifo_spacce'high+1);				
-			else
-				if(flush_sig = '1')then
-					unallocated_user_fifo_spacce <= conv_std_logic_vector(FIFO_DEPTH,unallocated_user_fifo_spacce'high+1);
-				elsif rx_data_arbit_req = '1' and user_data_rx_fifo_Dav = '1' then -- MRd reqeuest started and data shifted out of the fifo
-					unallocated_user_fifo_spacce <= unallocated_user_fifo_spacce + 1 - (curr_tx_burst_len(curr_tx_burst_len'high downto LOG2((PCIE_CORE_DATA_WIDTH/8)))) + OR_SUM_VECT(curr_tx_burst_len'high+1-LOG2((PCIE_CORE_DATA_WIDTH/8))+1,curr_tx_burst_len(LOG2((PCIE_CORE_DATA_WIDTH/8))-1 downto 0));
-				elsif rx_data_arbit_req = '1' then -- MRd reqeuest started
-					unallocated_user_fifo_spacce <= unallocated_user_fifo_spacce - ((curr_tx_burst_len(curr_tx_burst_len'high downto LOG2((PCIE_CORE_DATA_WIDTH/8)))) + OR_SUM_VECT(curr_tx_burst_len'high+1-LOG2((PCIE_CORE_DATA_WIDTH/8))+1,curr_tx_burst_len(LOG2((PCIE_CORE_DATA_WIDTH/8))-1 downto 0)));
-				elsif user_data_rx_fifo_Dav = '1' then -- data shifted out of the fifo
-					unallocated_user_fifo_spacce <= unallocated_user_fifo_spacce + 1; 
-				else
-					unallocated_user_fifo_spacce <= unallocated_user_fifo_spacce;
-				end if;
-			end if;
-		end if;
-	end process; 	
+--	process(clk)
+--	begin
+--		if rising_edge(clk) then
+--			if local_reset_n = '0' then
+--				 unallocated_user_fifo_spacce <= conv_std_logic_vector(FIFO_DEPTH,unallocated_user_fifo_spacce'high+1);				
+--			else
+--				if(flush_sig = '1')then
+--					unallocated_user_fifo_spacce <= conv_std_logic_vector(FIFO_DEPTH,unallocated_user_fifo_spacce'high+1);
+--				elsif rx_data_arbit_req = '1' and user_data_rx_fifo_Dav = '1' then -- MRd reqeuest started and data shifted out of the fifo
+--					unallocated_user_fifo_spacce <= unallocated_user_fifo_spacce + 1 - (curr_tx_burst_len(curr_tx_burst_len'high downto LOG2((PCIE_CORE_DATA_WIDTH/8)))) + OR_SUM_VECT(curr_tx_burst_len'high+1-LOG2((PCIE_CORE_DATA_WIDTH/8))+1,curr_tx_burst_len(LOG2((PCIE_CORE_DATA_WIDTH/8))-1 downto 0));
+--				elsif rx_data_arbit_req = '1' then -- MRd reqeuest started
+--					unallocated_user_fifo_spacce <= unallocated_user_fifo_spacce - ((curr_tx_burst_len(curr_tx_burst_len'high downto LOG2((PCIE_CORE_DATA_WIDTH/8)))) + OR_SUM_VECT(curr_tx_burst_len'high+1-LOG2((PCIE_CORE_DATA_WIDTH/8))+1,curr_tx_burst_len(LOG2((PCIE_CORE_DATA_WIDTH/8))-1 downto 0)));
+--				elsif user_data_rx_fifo_Dav = '1' then -- data shifted out of the fifo
+--					unallocated_user_fifo_spacce <= unallocated_user_fifo_spacce + 1; 
+--				else
+--					unallocated_user_fifo_spacce <= unallocated_user_fifo_spacce;
+--				end if;
+--			end if;
+--		end if;
+--	end process; 	
     
   
-  user_data_rx_fifo_Wd	<= (others => '0');  
+  --user_data_rx_fifo_Wd	<= (others => '0');  
   
-  last_cycle_in_transfer <=  rx_done and context_in3(context_in3'high); --sg_last_record;                                           
+  --last_cycle_in_transfer <=  rx_done and context_in3(context_in3'high); --sg_last_record;                                           
                            
 
-  bmi_rx_data_valid	<= user_data_rx_fifo_Dav;
-  bmi_rx_first		<= user_data_rx_fifo_Rd(PCIE_CORE_DATA_WIDTH) and user_data_rx_fifo_Dav;
-  bmi_rx_last		<= user_data_rx_fifo_Rd(PCIE_CORE_DATA_WIDTH+1) and user_data_rx_fifo_Dav;
-  bmi_rx_data		<= user_data_rx_fifo_Rd(bmi_rx_data_o'high downto 0) when user_data_rx_fifo_Dav = '1' else (others => '0');
-  bmi_rx_be			<= user_data_rx_fifo_Rd(user_data_rx_fifo_Rd'high downto PCIE_CORE_DATA_WIDTH+2);
+  --bmi_rx_data_valid	<= user_data_rx_fifo_Dav;
+  --bmi_rx_first		<= user_data_rx_fifo_Rd(PCIE_CORE_DATA_WIDTH) and user_data_rx_fifo_Dav;
+  --bmi_rx_last			<= user_data_rx_fifo_Rd(PCIE_CORE_DATA_WIDTH+1) and user_data_rx_fifo_Dav;
+  --bmi_rx_data			<= user_data_rx_fifo_Rd(bmi_rx_data_o'high downto 0) when user_data_rx_fifo_Dav = '1' else (others => '0');
+  --bmi_rx_be			<= user_data_rx_fifo_Rd(user_data_rx_fifo_Rd'high downto PCIE_CORE_DATA_WIDTH+2);
       
-  user_data_rx_fifo_RE	<= bmi_rx_rdy_i and not user_data_rx_fifo_Empty;
-  
-  
-  user_data_rx_fifo : FIFO_core_wc 
-  generic map
-  (
-       Data_Width => PCIE_CORE_DATA_WIDTH+2+log2(PCIE_CORE_DATA_WIDTH/8),
-       Log2_of_Depth => USER_FIFO_DEPTH_LOG2+1  -- We added 1 to the fifo depth because all our calcualations are based on the
-       											-- assumption that the fifo depth is an integral of read_packet_size
-       											-- since FIFO_core_wc REAL size is  2 pow(USER_FIFO_DEPTH_LOG2-1) we add 1 to make suer
-       											-- that the fifo is big enough  
- 
-  )
-  port map
-  (
-	C		=> clk, 
-	R       =>bm_active,
-       --Write side
- 	wc		=> user_data_rx_fifo_wc(USER_FIFO_DEPTH_LOG2 downto 0),
-	Wd      => user_data_rx_fifo_Wd,
-    WE      => user_data_rx_fifo_WE,
-    Full    => user_data_rx_fifo_Full,
-       --read side
-    Rd      => user_data_rx_fifo_Rd,
-    RE      => user_data_rx_fifo_RE,
-    Dav     => user_data_rx_fifo_Dav,
-    Empty   => user_data_rx_fifo_Empty 
-   );    
-   
-   user_data_rx_fifo_wc(user_data_rx_fifo_wc'high downto  1+USER_FIFO_DEPTH_LOG2) <= (others => '0');
+  --user_data_rx_fifo_RE	<= bmi_rx_rdy_i and not user_data_rx_fifo_Empty;
+  --
+  --
+  --user_data_rx_fifo : FIFO_core_wc 
+  --generic map
+  --(
+  --     Data_Width => PCIE_CORE_DATA_WIDTH+2+log2(PCIE_CORE_DATA_WIDTH/8),
+  --     Log2_of_Depth => USER_FIFO_DEPTH_LOG2+1  -- We added 1 to the fifo depth because all our calcualations are based on the
+  --     											-- assumption that the fifo depth is an integral of read_packet_size
+  --     											-- since FIFO_core_wc REAL size is  2 pow(USER_FIFO_DEPTH_LOG2-1) we add 1 to make suer
+  --     											-- that the fifo is big enough  
+  --
+  --)
+  --port map
+  --(
+--	C		=> clk, 
+--	R       =>bm_active,
+  --     --Write side
+ --	wc		=> user_data_rx_fifo_wc(USER_FIFO_DEPTH_LOG2 downto 0),
+--	Wd      => user_data_rx_fifo_Wd,
+  --  WE      => user_data_rx_fifo_WE,
+  --  Full    => user_data_rx_fifo_Full,
+  --     --read side
+  --  Rd      => user_data_rx_fifo_Rd,
+  --  RE      => user_data_rx_fifo_RE,
+  --  Dav     => user_data_rx_fifo_Dav,
+  --  Empty   => user_data_rx_fifo_Empty 
+  -- );    
+  -- 
+  -- user_data_rx_fifo_wc(user_data_rx_fifo_wc'high downto  1+USER_FIFO_DEPTH_LOG2) <= (others => '0');
   
  
   	
   	stall_sig <= '1' when (bmi_tx_data_valid = '1' and tx_accum_for_burst =  max_payload_size-PCIE_CORE_DATA_WIDTH/8) or  bmi_tx_last_sig = '1' else '0';   
-  	tx_data_rdy <=  tx_active and not (stall_tx or stall_end_of_buffer) when  burst_active = '1' and cli_count > 0  else '0';
-  	stall_tx 	<=  or_sum(stall_tx_sfr) or stall_latch;
-  	
-  	process(clk)
-   	begin
- 		if rising_edge(clk) then
- 			if(reset_n_i = '0' or flush_sig = '1')then
- 				stall_latch 	<= '0';
- 				stall_tx_sfr <=	(others => '0');
- 			else
- 			
- 				if  stall_sig = '1' then 
- 				 	stall_latch <=	'1';
- 				elsif stall_tx_sfr = 0 and not (tx_bufffer_space_i < max_payload_size_i(max_payload_size_i'high downto 3)) then
- 					stall_latch <=	'0';
- 				end if;
- 				
- 				stall_tx_sfr(0) <=	stall_sig;
- 				for i in 1 to stall_tx_sfr'high loop  
- 					stall_tx_sfr(i) <= stall_tx_sfr(i-1);
- 				end loop;		
- 				 				
- 			end if;
- 		end if;
- 	end process;
+  	--tx_data_rdy <=  tx_active and not (stall_tx or stall_end_of_buffer) when  burst_active = '1' and cli_count > 0  else '0';
+
+gen_stall_eop: if STALL_ON_EOP = 1 generate
+  		tx_data_rdy <=  tx_active and not  stall_end_of_buffer when  burst_active = '1' and cli_count > 0  else '0';
+end generate;
+
+gen_not_stall_eop: if STALL_ON_EOP = 0 generate	
+		tx_data_rdy <=  tx_active when  burst_active = '1' and cli_count > 0  else '0';
+end generate;
  
-   
   
 	 	
   process(clk)
   begin
 	if rising_edge(clk) then
 		
-		if(reset_n_i = '0' or flush_sig = '1')then
+		if(local_reset_n = '0' or flush_sig = '1')then
 			
 		
 			bm_req <= '0';
@@ -892,6 +898,8 @@ end generate;
 			pending_mrd_requests <= 0;
 			record_reading_active <= '0';
 			
+			pending_burst_cnt <= 0;
+			
 	
 			dbg_signal	<= '0';
 			
@@ -915,7 +923,7 @@ end generate;
 			status_qword_int	<= (others => '0');	
 			status_addr_int	 	<= (others => '0');	
 			do_stat_int 		<= '0';
-			next_user_data_rx_fifo_Wd <= (others => '0'); 
+			--next_user_data_rx_fifo_Wd <= (others => '0'); 
 		else
 		
 			
@@ -937,21 +945,15 @@ end generate;
 			rx_last 					<= '0';
 			tx_last					<= '0';
 			
-			
-			
-			
-			
 			stop_sig 	<= '0';
-			
-			
-
-
 			
 			if bmi_tx_last_i = '1' then
 				tx_last_letch <= '1';
 			end if;		
 			
-			if bmi_tx_last_sig = '1' then
+			if flush_out_buffers = '1' then
+				cli_count <= 0;	
+			elsif bmi_tx_last_sig = '1' then
 				cli_count <= 0;
 			elsif(bmi_tx_data_valid = '1' and  cli_count > (PCIE_CORE_DATA_WIDTH/8))then 
 				cli_count <= cli_count-(PCIE_CORE_DATA_WIDTH/8);
@@ -961,20 +963,20 @@ end generate;
 				cli_count <= 0;	
 			end if;
 
-			if tx_last = '0' and tx_active_i = '1' and bmi_tx_data_valid = '1' and bmi_tx_last_sig = '1' then
+			if flush_out_buffers = '0' and tx_last = '0' and tx_active_i = '1' and bmi_tx_data_valid = '1' and bmi_tx_last_sig = '1' then
 				tx_last <= '1';
-			elsif(tx_last = '0' and bmi_tx_data_valid = '1' and  not(cli_count > (PCIE_CORE_DATA_WIDTH/8)))then 
+			elsif(flush_out_buffers = '0' and tx_last = '0' and bmi_tx_data_valid = '1' and  not(cli_count > (PCIE_CORE_DATA_WIDTH/8)))then 
 				tx_last <= '1';
 			end if;						
 
-			if(bmi_tx_data_valid = '1' and cli_count < PCIE_CORE_DATA_WIDTH/8) and cli_count > 0 then
+			if flush_out_buffers = '0' and (bmi_tx_data_valid = '1' and cli_count < PCIE_CORE_DATA_WIDTH/8) and cli_count > 0 then
 				transfer_count <= transfer_count + cli_count;
-			elsif bmi_tx_data_valid = '1' then
+			elsif flush_out_buffers = '0' and bmi_tx_data_valid = '1' then
 				transfer_count <= transfer_count +  (PCIE_CORE_DATA_WIDTH/8);
 			end if;
 			
-			if sg_dir = '0' and bm_transfer_size_valid = '1' then
-				transfer_count_fixed <= bm_transfer_size;
+			if flush_out_buffers = '1' then
+				transfer_count_fixed <= (others => '0');
 			elsif bmi_tx_last_sig_d1 = '1' then
 				transfer_count_fixed <= transfer_count-bmi_tx_empty_i;
 			elsif bmi_tx_data_valid_d = '1' then 
@@ -985,21 +987,22 @@ end generate;
 			
 						
 			tx_burst_rdy <= '0';
-			if bmi_tx_data_valid = '1' and (tx_accum_for_burst =  max_payload_size-(PCIE_CORE_DATA_WIDTH/8) or  bmi_tx_last_sig = '1') then
+			if flush_out_buffers = '0' and bmi_tx_data_valid = '1' and (tx_accum_for_burst =  max_payload_size-(PCIE_CORE_DATA_WIDTH/8) or  bmi_tx_last_sig = '1') then
 				curr_tx_burst_len <=  conv_std_logic_vector(tx_accum_for_burst+(PCIE_CORE_DATA_WIDTH/8),curr_tx_burst_len'high+1);
 				tx_burst_rdy <= '1';
-			elsif bmi_tx_last_sig = '1' and tx_accum_for_burst > 0 then
+				tx_burst_rdy_cnt <= tx_burst_rdy_cnt+1;
+			elsif flush_out_buffers = '0' and bmi_tx_last_sig = '1' and tx_accum_for_burst > 0 then
 				curr_tx_burst_len <=  conv_std_logic_vector(tx_accum_for_burst,curr_tx_burst_len'high+1);
 				tx_burst_rdy <= '1';	
 			end if;	
 
 			
-			if burst_active = '1' then -- and cli_count > 0 then
+			--if burst_active = '1' then -- and cli_count > 0 then
 				tx_data_valid_int <= bmi_tx_data_valid; -- data valid form the client
 				tx_data <= bmi_tx_data_i; -- client data
-			end if;
+			--end if;
 
-			if stop_sig = '1' then
+			if stop_sig = '1' or flush_out_buffers = '1' then
 				tx_accum_for_burst <= 0;					
 			elsif bmi_tx_data_valid = '1' and ((tx_accum_for_burst+(PCIE_CORE_DATA_WIDTH/8) =  max_payload_size) or  bmi_tx_last_sig = '1') then
 				tx_accum_for_burst <= 0;
@@ -1010,22 +1013,7 @@ end generate;
 			elsif bmi_tx_data_valid = '1' then --and cli_count > 0 then
 				tx_accum_for_burst <= tx_accum_for_burst +  (PCIE_CORE_DATA_WIDTH/8);
 			end if;
-	
 									
-			if sg_dir = '0' and rx_data_rdy = '1' and cli_count > (PCIE_CORE_DATA_WIDTH/8) then
-				cli_count <= cli_count-(PCIE_CORE_DATA_WIDTH/8);
-			elsif sg_dir = '0' and rx_data_rdy = '1' then --rx_data_rdy_mult = '1' then 
-				cli_count <= 0;
-			end if;	
-
-			--if sg_dir = '0' and context_in1(15 downto 8) = GET_DATA_REQ and  rx_data_rdy = '1' then
-			--	transfer_count <= transfer_count +  (PCIE_CORE_DATA_WIDTH/8);
-			--end if;
-				
-			
-			if sg_dir = '0' and context_in3(context_in3'high) = '1' and rx_data_rdy = '1' and cli_count = (PCIE_CORE_DATA_WIDTH/8) then
-				rx_last <= '1';
-			end if;			
 
 			if bm_inturnal_req_active = '0' then
 				rx_data_rdy <= rx_active;			
@@ -1046,52 +1034,10 @@ end generate;
 			rx_data_arbit_req <= '0';
 			do_stat_int <= '0';						
 			
-			-- ido check if works with altera 
-			--if bm_inturnal_req_active = '0' and rx_done = '1' and pending_mrd_requests > 0 and bm_req = '0' 
-			if context_in0(15 downto 8) = GET_DATA_REQ and rx_done = '1' and pending_mrd_requests > 0 and rec_fifo_dav = '0' then
-				pending_mrd_requests <= pending_mrd_requests-1;
-			--elsif bm_inturnal_req_active = '0' and sg_dir = '0' and rx_done = '0'  and bm_req = '1' then
-			elsif rec_fifo_dav = '1'  and sg_dir = '0' then
-				pending_mrd_requests <= pending_mrd_requests+1;
-			end if;
-			
-			
-			--rec_to_fifo_d <= rec_to_fifo;
-			--rec_fifo_write_d <= rec_fifo_write;
-  			--if rec_fifo_write_d = '1' and rec_to_fifo_d(31 downto 16) /= x"abcd" then
-			--	err_in_record <= '1';
-			--	dbg_out <= '1';
-			--end if;
 			
 --- for debug only -----------------------------------
 
 		dbg_out <= '0';
-		
-		--if user_data_rx_fifo_WE	= '1' and next_user_data_rx_fifo_Wd /= user_data_rx_fifo_Wd(31 downto 0) then
-		--	dbg_out <= '1';
-		--end if;			
-	    --
-		--if bmi_tx_data_valid_i = '1'  and next_user_data_rx_fifo_Wd /= bmi_tx_data_i(31 downto 0) then
-		--	dbg_out <= '1';
-		--end if;
-		--	
-		--if bmi_tx_data_valid_i = '1' then
-		--	next_user_data_rx_fifo_Wd <= bmi_tx_data_i(31 downto 0)+(PCIE_CORE_DATA_WIDTH/32);
-		--end if;	
-		--
-		--
-		--if user_data_rx_fifo_WE	= '1' then
-		--	next_user_data_rx_fifo_Wd <= user_data_rx_fifo_Wd(31 downto 0)+(PCIE_CORE_DATA_WIDTH/32);
-		--end if;	
-		--
-		--
-		--
-		--if bmi_rx_last = '1' or bmi_tx_last_i = '1' then
-		--	next_user_data_rx_fifo_Wd <= (others => '0');
-		--end if; 
-		
-		
-	
 
 			
 			prev_state <= sm_state;
@@ -1122,7 +1068,7 @@ end generate;
 					flush_out_buffers <= '1';
 					curr_transfer_done <= '0';
 					record_reading_active <= '0'; 
-					
+										
 					if bm_start = '1' then
 						sm_state <= SG_STATE_WAIT_FOR_REC;
 					end if;
@@ -1131,30 +1077,24 @@ end generate;
 												
 					bm_active 			<= bm_active;
 									
--- 					dbg_out <= '0';
--- 					if dbg_out = '0' then
--- 						state_tics_cnt <= state_tics_cnt+1;
--- 					end if;
--- 					if state_tics_cnt > 3000 then
--- 							dbg_out <= '1';
--- 					end if;						
+					if tx_burst_rdy = '1' and data_arbit_rdy = '0' then
+						pending_burst_cnt <= pending_burst_cnt+1;
+					elsif data_arbit_rdy = '1' and tx_burst_rdy = '0' then
+						pending_burst_cnt <= pending_burst_cnt-1;
+					end if;
+						
 				
 					if data_arbit_rdy = '1' then
 						data_burst_arbit <= '0';
 						sm_state <= sm_next_state;
 						bm_req <= '1';
-						
 						tx_sys_addr <= tx_sys_addr_s;
 						tx_burst_size <= tx_burst_size_s;
 						tx_dir <= tx_dir_s;				
 						user_context <= user_context_s;
 						
+						
 					end if;
-				when SG_WAIT_FOR_GRNAT_SIG =>	
-					if bm_rdy_re = '1' then
-						sm_state <= SG_PREPARE_NEXT_RECORD_SEGMENT;
-						tx_sys_addr <= tx_sys_addr + tx_burst_size_s; --MAX_USER_RX_REQUEST_SIZE; --max_payload_size;
-					end if;	
 				when SG_STATE_WAIT_FOR_REC =>	
 
 					sm_state <= SG_READ_NEX_RECORD;
@@ -1169,7 +1109,7 @@ end generate;
 						do_stat_int <= '1';
 					elsif stop_req = '1' then
 						sm_state <= SG_STATE_STOP;						
-					elsif cli_count = 0 and sg_last_record = '0' then
+					elsif cli_count = 0 and sg_last_record = '0' and bm_tx_data_front_buff_empty = '1' then
 						sm_state <= SG_READ_NEX_RECORD;
 					end if;
 				when SG_READ_NEX_RECORD =>	
@@ -1179,96 +1119,38 @@ end generate;
 						sg_rec <= rec_fifo_read_data;
 					end if;
 					
-					if  rec_fifo_dav = '1' and sg_dir = '0'	then
-						sm_state <= SG_WAIT_FOR_RX_RDY;
-					elsif rec_fifo_dav = '1' then
-						sm_state <= SG_DATA_TRANSFER_RDY;
+					if rec_fifo_dav = '1' then
+						sm_state <= SG_DATA_ARBIT_REQ; 
 					end if;	
+
+					if stop_req = '1' then
+						sm_state <= SG_STATE_STOP;
+					end if;
+										
 
 					if  rec_fifo_dav = '1' then
 						curr_transfer_size <= rec_fifo_read_data(95 downto 64); 
 						cli_count <= conv_integer(rec_fifo_read_data(95 downto 64)) - tx_accum_for_burst;
 						tx_sys_addr <= rec_fifo_read_data(63 downto 2) & "00";
-					end if;
-					
-					
-					
- 				when SG_WAIT_FOR_FRONT_BUFF_EMPTY =>
- 						
- 					if bm_tx_data_front_buff_empty = '1' then	
- 						curr_transfer_done <= '0';
- 						sm_state <= SG_STATE_STOP;
- 					end if;
-					
-				when SG_WAIT_FOR_RX_RDY =>
-
+						tx_sys_addr_s <= rec_fifo_read_data(63 downto 2) & "00";
 						
-					state_tics_cnt <= 0;	
-					
-					if curr_transfer_size > MAX_USER_RX_REQUEST_SIZE then --max_read_request_size then
-						curr_tx_burst_len <= conv_std_logic_vector(MAX_USER_RX_REQUEST_SIZE,curr_tx_burst_len'high+1); --max_read_request_size; 
-					else
-						curr_tx_burst_len <= curr_transfer_size(curr_tx_burst_len'high downto 0);
 					end if;
-					
-					if sg_last_record = '1' and not(curr_transfer_size > MAX_USER_RX_REQUEST_SIZE) then --max_read_request_size) then
-						last_read_req <= '1';
-					end if;
-
-					sm_state <= SG_WAIT_ON_RX_USER_BUFFER;
-
-										
-				when SG_WAIT_ON_RX_USER_BUFFER =>					
-
-					if stop_req = '1' then
-						sm_state <= SG_STATE_STOP;
-					elsif stop_req = '0' and OR_SUM(curr_tx_burst_len(LOG2((PCIE_CORE_DATA_WIDTH/8))-1 downto 0)) = '1' and not((curr_tx_burst_len(curr_tx_burst_len'high downto LOG2((PCIE_CORE_DATA_WIDTH/8))) + 1) > unallocated_user_fifo_spacce)	then
-						rx_data_arbit_req <= '1';
-						state_tics_cnt <= 0;
-						sm_state <= SG_DATA_ARBIT_REQ;
-					elsif stop_req = '0' and  not(curr_tx_burst_len(curr_tx_burst_len'high downto LOG2((PCIE_CORE_DATA_WIDTH/8))) > unallocated_user_fifo_spacce) 	then
-						rx_data_arbit_req <= '1';
-						state_tics_cnt <= 0;
-						sm_state <= SG_DATA_ARBIT_REQ;
-					end if;
-
-				when SG_DATA_TRANSFER_RDY =>
-					
-					--dbg_out <= dbg_out; 	
-					 
-						 state_tics_cnt <= 0;
-						 sm_state <= SG_DATA_ARBIT_REQ;
-					
+				
 					
 				when SG_DATA_ARBIT_REQ =>
 									
-					sm_state <= SG_DATA_ARBIT_REQ;
+						sm_state <= SG_DATA_ARBIT_REQ;
 					
-					if sg_dir = '0' then 
-						tx_dir_s <= sg_dir;
-						tx_sys_addr_s <= tx_sys_addr;
-						user_context_s <= last_read_req & "00" & "0000000000000" &  GET_DATA_REQ & conv_std_logic_vector(CHAN_NUM,8);
-						last_read_req <= '0';						
-						state_tics_cnt <= 0;
-						
-						data_burst_arbit <= '1';
-						sm_state <= SG_WAIT_FOR_GNT;
-						tx_burst_size_s <=  curr_tx_burst_len;
-						sm_next_state <= SG_WAIT_FOR_DATA_TRANSFER;
-						curr_transfer_done <= '0';
-						
-						
-						if curr_transfer_size > MAX_USER_RX_REQUEST_SIZE then --max_read_request_size then
-							curr_transfer_size <= curr_transfer_size - MAX_USER_RX_REQUEST_SIZE; --max_read_request_size; -
-						 else
-							curr_transfer_done <= '1';
-							curr_transfer_size <= (others => '0');
+						if tx_burst_rdy = '1' then
+							pending_burst_cnt <= pending_burst_cnt+1;
 						end if;
-
-                     elsif sg_dir = '1' then
                      		
  						tx_dir_s <= sg_dir;
- 						tx_sys_addr_s <= tx_sys_addr;
+ 						
+ 						-- bm_req is '1' for one cycle in SG_DATA_ARBIT_REQ if the prev state was SG_WAIT_FOR_GNT. inc the address of the next burst.
+ 						if bm_req = '1' then
+							tx_sys_addr_s <= tx_sys_addr + tx_burst_size_s;						
+						end if;
  						
  						tx_burst_size_s <=  curr_tx_burst_len;
 
@@ -1276,142 +1158,45 @@ end generate;
 							curr_transfer_done <= '1';
 						end if;
 						
-						if cli_count = PCIE_CORE_DATA_WIDTH/4 and bmi_tx_data_valid_i = '1' and sg_last_record = '1' then
+						if cli_count = PCIE_CORE_DATA_WIDTH/4 and bmi_tx_data_valid_i = '1' then -- and sg_last_record = '1' then
 							stall_end_of_buffer <= '1';
 						end if;
 						
  						if stop_req = '1' then
 							sm_state <= SG_STATE_STOP;					 						
-						elsif tx_burst_rdy = '0' and bmi_tx_last_sig_d = '1' and tx_accum_for_burst = 0 then -- last with no data, tx_accum_for_burst = 0
- 							curr_transfer_done <= '1';
- 							curr_transfer_size <= (others => '0');
- 							sm_state <= SG_STATE_WAIT_CLI_PRE_STATUS;
-						elsif tx_burst_rdy = '0' and bmi_tx_last_sig_d = '1' then -- last with no data, tx_accum_for_burst != 0
- 							curr_transfer_done <= '1';
- 							curr_transfer_size <= (others => '0');
- 							sm_next_state <= SG_WAIT_FOR_DATA_TRANSFER;
- 							data_burst_arbit <= '1';
- 							sm_state <= SG_WAIT_FOR_GNT;
-	 					elsif tx_burst_rdy = '1' and stop_req = '1' then			
+ 						elsif pending_burst_cnt > 0 and bmi_tx_last_sig_d = '1' then -- last with data
  							curr_transfer_done <= '1';
  							curr_transfer_size <= (others => '0');
  							state_tics_cnt <= 0;
- 							sm_next_state <= SG_WAIT_FOR_FRONT_BUFF_EMPTY;
+ 							sm_next_state <= SG_STATE_WAIT_CLI_PRE_STATUS; 
  							data_burst_arbit <= '1';
  							sm_state <= SG_WAIT_FOR_GNT;
- 							tx_sys_addr_s <= tx_sys_addr or x"0000000000000001";
- 						elsif tx_burst_rdy = '1' and bmi_tx_last_sig_d = '1' then -- last with data
- 							curr_transfer_done <= '1';
- 							curr_transfer_size <= (others => '0');
- 							state_tics_cnt <= 0;
- 							sm_next_state <= SG_WAIT_FOR_DATA_TRANSFER;
- 							data_burst_arbit <= '1';
- 							sm_state <= SG_WAIT_FOR_GNT;
- 						elsif tx_burst_rdy = '1' and bmi_tx_last_sig = '1' then -- in case the user sets bmi_tx_last 1 cyle after valid is set to 0 
- 							curr_transfer_done <= '1';
- 							curr_transfer_size <= (others => '0');
- 							sm_next_state <= SG_WAIT_FOR_DATA_TRANSFER;
- 							data_burst_arbit <= '1';
- 							sm_state <= SG_WAIT_FOR_GNT;
- 						elsif(tx_burst_rdy = '1' and curr_transfer_size > max_payload_size)then -- got tx_burst_rdy because accum for burts is max_payload_size
- 							--tx_burst_size_s <= max_payload_size;
+ 						elsif(pending_burst_cnt > 0 and curr_transfer_size > max_payload_size)then -- for burts of max_payload_size
  							curr_transfer_done <= '0';
  							curr_transfer_size <= curr_transfer_size - max_payload_size; --Ido
  							state_tics_cnt <= 0;
- 							sm_next_state <= SG_WAIT_FOR_DATA_TRANSFER;
+ 							sm_next_state <= SG_DATA_ARBIT_REQ;
  							data_burst_arbit <= '1';
  							sm_state <= SG_WAIT_FOR_GNT;
- 						elsif tx_burst_rdy = '1' or cli_count = 0 then
+ 						elsif pending_burst_cnt > 0 or cli_count = 0 then
  							curr_transfer_done <= '1';
  							curr_transfer_size <= (others => '0');
  							state_tics_cnt <= 0;
- 							sm_next_state <= SG_WAIT_FOR_DATA_TRANSFER;
+ 							sm_next_state <= SG_WAIT_FOR_CLI_ZERO;
  							data_burst_arbit <= '1';
  							sm_state <= SG_WAIT_FOR_GNT;
  						end if;
- 					end if;
+ 					
 				
-				when SG_WAIT_FOR_DATA_TRANSFER =>	
-				
-				
-					--if state_tics_cnt > 3000 then
-					--		dbg_out <= '1';
-					--end if;				
 
-				
-					if(sg_dir = '1')then
-						sm_state <= SG_DATA_TRANSFER;
-					else
-						
-						--------- New Implementation ----------------------------------------
-						--if curr_transfer_size > 0 then
-						--	sm_state <= SG_OUT_ADDR_INC;
-						--else
-						--	sm_state <= SG_READ_NEX_RECORD;
-						--end if; 
-												
-						if curr_transfer_size > 0 then
-							sm_state <= SG_OUT_ADDR_INC;
-						--elsif recores_left > 0 then
-						elsif pending_mrd_requests < NUM_NUM_OF_USER_RX_PENDINNG_REQUEST and sg_last_record = '0' then 
-							sm_state <= SG_READ_NEX_RECORD;
-						else --if curr_transfer_done = '0' then
-							sm_state <= SG_WAIT_FOR_DATA_IN_DONE;
-						end if;	
-						--------------------------------------------------------------------------
-						
-						
-						dbg_cnt <= 0;
-					end if;	
-				when SG_OUT_ADDR_INC =>
-						
-						if bm_rdy_re = '1' then
-							state_tics_cnt <= 0;
-							sm_state <= SG_WAIT_FOR_RX_RDY;
-							tx_sys_addr <= tx_sys_addr + tx_burst_size;
-						end if;
-					
-								
-					
-				when SG_WAIT_FOR_DATA_IN_DONE =>	
-					
-					if(curr_transfer_done = '1' and pending_mrd_requests = 0 and user_data_rx_fifo_Empty = '1')then
-						curr_transfer_done <= '0';
-						--dbg_out <= '0';
-						--state_tics_cnt <= 0;
-						--sm_state <= SG_STATE_STATUS_ARBIT_REQ;
-						sm_state <= SG_WAIT_FOR_CLI_ZERO;
-					elsif(curr_transfer_done = '0' and rx_done = '1')then
-						-- end of burst
-						state_tics_cnt <= 0;
-						tx_sys_addr <= tx_sys_addr + tx_burst_size;
-						sm_state <= SG_DATA_ARBIT_REQ;	
-					end if;
-
-				when SG_DATA_TRANSFER =>
-															
-					--if(curr_transfer_done = '1'  and recores_left > 0)then
-					if curr_transfer_done = '1'  and sg_last_record = '0' then
-						--dbg_out <= '0';
-						--state_tics_cnt <= 0;
-						sm_state <= SG_WAIT_FOR_CLI_ZERO;
-					elsif curr_transfer_done = '1'  then
-						-- end of transfer
-					--	sm_state <= SG_STATE_STATUS_0;  xxxx
-						sm_state <= SG_STATE_WAIT_CLI_PRE_STATUS;
-					elsif(curr_transfer_done = '0'  )then
-						-- end of burst 
-						state_tics_cnt <= 0;
-						tx_sys_addr <= tx_sys_addr + tx_burst_size;   
-						sm_state <= SG_DATA_ARBIT_REQ;
-					end if;
-				 when SG_STATE_WAIT_CLI_PRE_STATUS =>
+				when SG_STATE_WAIT_CLI_PRE_STATUS =>
 				 		
+						pending_burst_cnt <= 0;
 				 		if cli_count = 0 and bm_tx_data_front_buff_empty = '1' then
 				 			buffer_rdy_o <= '0';
 				 			curr_transfer_done <= '0';
 				 			do_stat_int <= '1';
-							sm_state <= SG_STATE_STATUS_0; --SG_WAIT_FOR_FRONT_BUFF_EMPTY; 
+							sm_state <= SG_STATE_STATUS_0; 
 				 		end if;
 				 		
 				 		
@@ -1454,12 +1239,12 @@ end generate;
   
  
   
- process(clk) 
- begin
- 	if rising_edge(clk) then
-		user_last_write_sig <= context_in1(31) and not context_in0(31);
-	end if;  
- end process;
+ --process(clk) 
+ --begin
+ --	if rising_edge(clk) then
+--		user_last_write_sig <= context_in1(31) and not context_in0(31);
+--	end if;  
+ --end process;
   
   
   --user_last_write_sig <= context_in2(31) and not context_in1(31);  
@@ -1468,7 +1253,7 @@ end generate;
  input_signals_sampling : process(clk) 
  begin
     if rising_edge(clk) then
-		if (reset_n_i = '0') then
+		if (local_reset_n = '0') then
 			max_payload_size	<= (others => '0');			
 			sys_ena 			<=	 '0'; 								
 				
@@ -1509,7 +1294,7 @@ end generate;
 				
 			rx_data				<=  rx_data_i;
 			rx_data_d			<=  rx_data;
-			user_write_d		<= user_write;
+			--user_write_d		<= user_write;
 			rx_done				<=  rx_done_i;	
 			rx_done_d 			<=  rx_done;
 			rx_done_d1			<=	 rx_done_d; 
@@ -1542,7 +1327,7 @@ end generate;
  transfer_done_proc : process(clk)
  begin
 	if rising_edge(clk)then
-		if(reset_n_i = '0')then
+		if(local_reset_n = '0')then
 			curr_transfer_done_d <= '0'; 
 			bmi_tx_last_d <= '0';
 		else
@@ -1580,9 +1365,9 @@ end generate;
   begin
 	if rising_edge(clk) then
 		if sg_cyclic = '1' then
-			record_fifo_reset_n <= reset_n_i and not flush_sig;
+			record_fifo_reset_n <= local_reset_n and not flush_sig;
 		else
-			record_fifo_reset_n <= reset_n_i and not ( flush_sig or bmi_tx_last_sig);
+			record_fifo_reset_n <= local_reset_n and not ( flush_sig or bmi_tx_last_sig);
 		end if;
 	end if;
  end process;
@@ -1630,7 +1415,7 @@ port map
            
     gen_status_req			=> do_stat_int,
     status_interrupt_done	=> status_interrupt_done,
-    transfer_count			=> transfer_count_fixed, --transfer_count,
+    transfer_count			=> transfer_count,
     
     status_ack				=> status_ack,
 	status_addr_out			=> stat_int_status_addr,  
@@ -1645,7 +1430,7 @@ port map
 	tx_burst_size           => stat_int_tx_burst_size,
 	tx_dir                  => stat_int_tx_dir, 
 	tx_context				=> stat_int_context,
-	
+	tx_last_in				=> bmi_tx_last_sig,
 
 	req_active				=> bm_inturnal_req_active,	
   	
@@ -1653,12 +1438,20 @@ port map
 	rx_data   				=> rx_data_i, 	  			
 	rx_done					=> rx_done_i,				
 	rx_active				=> rx_active_i,				
-	bm_rx_last_in_burst 	=> bm_rx_last_in_burst_i,
-	rx_be_i					=> rx_be_i					
-	
+	rx_be_i					=> rx_be_i,
 
-  		      
+	dbg_out					=> stat_int_dbg_out,
 
+	desc_low_0				=> (desc_low_0),
+	desc_low_1				=> (desc_low_1),
+	desc_low_2				=> (desc_low_2),
+	desc_low_3				=> (desc_low_3),
+	desc_low_4				=> (desc_low_4),
+	desc_low_5				=> (desc_low_5),
+	desc_low_6				=> (desc_low_6),
+	desc_low_7				=> (desc_low_7),
+	desc_low_8				=> (desc_low_8),
+	desc_low_9				=> (desc_low_9)
     		
   
 	);
@@ -1667,13 +1460,13 @@ port map
 
 	 
 
-	flush_sig <= bm_wait_for_int_ack_i;
+	flush_sig <= stop_sig or bm_wait_for_int_ack_i;
 	
 	
 	 process(clk)
 	 begin
 		if rising_edge(clk) then
-			if(reset_n_i = '0')then
+			if(local_reset_n = '0')then
 				flush_out <= '0';
 			else
 				flush_out <= '0';
@@ -1692,7 +1485,7 @@ port map
 	tx_arbiterer_proc : process(clk)
 	 begin
 		if rising_edge(clk) then
-			if(reset_n_i = '0')then
+			if(local_reset_n = '0')then
 				data_arbit_rdy <= '0';
 				stat_int_tx_grnt <= '0';
 				stat_int_tx_grnt_d <= '0';
@@ -1733,27 +1526,27 @@ port map
 
 	bm_tx_data_front_buff_empty_sig <= bm_tx_data_front_buff_empty and not bm_tx_data_front_buff_empty_d;
 	transfer_done_sig 				<= curr_transfer_done_d and not curr_transfer_done;
-
+	bm_rx_rdy_o						<= bm_inturnal_req_active;
 	rec_rdy 						<= rx_done and bm_rec_req_pending;
 	burst_active 					<= not bm_inturnal_req_active;
 	
 	rx_data_rdy_mult 				<= rx_data_rdy_d and rx_data_rdy;
 	rx_data_rdy_fe 					<= rx_data_rdy_d and not rx_data_rdy;
 
-	bm_rx_rdy_o						<= bm_inturnal_req_active or not user_data_rx_fifo_Full; 
+	
 		
 -- entity port outputs
 	int_gen_o						<= do_interrupt;
 	
-
-	bmi_rx_data_o 					<= bmi_rx_data;	
-	bmi_rx_data_valid_o				<= bmi_rx_data_valid;
-	bmi_rx_last_o					<= bmi_rx_last;
-	bmi_rx_first_o					<= bmi_rx_first_sig;
-	
-		
+	 
+	bmi_rx_data_o 					<= (others => '0');	
+	bmi_rx_data_valid_o				<= '0';
+	bmi_rx_last_o					<= '0';
+	bmi_rx_first_o					<= '0';
+	bmi_rx_be_o						<= (others => '0');
+	bmi_rx_pending_o 				<= (others => '0');	
 	bmi_tx_data_rdy_o				<= tx_data_rdy;
-	bmi_rx_be_o						<= bmi_rx_be;
+	
 	bmi_transfer_done_o 			<= transfer_done_sig;
 	
 
@@ -1761,7 +1554,7 @@ port map
 	 process(clk)
 	 begin
 		if rising_edge(clk) then
-			if reset_n_i = '0' then
+			if local_reset_n = '0' then
 				bm_req_o			   			<= 	'0';
 				tx_sys_addr_o					<=  (others => '0'); 
 				tx_burst_size_o					<=  (others => '0'); 
@@ -1818,35 +1611,35 @@ port map
 	
 	
 	 
-	 first_record_sig <= '1' when rec_fifo_read_data(1) = '1'  and (sg_first_record /= '1') else '0';
+	 --first_record_sig <= '1' when rec_fifo_read_data(1) = '1'  and (sg_first_record /= '1') else '0';
 	 	
-	 bmi_rx_first_sig <= bmi_rx_first and not bmi_rx_first_d;
+	 --bmi_rx_first_sig <= bmi_rx_first and not bmi_rx_first_d;
 	 
-	 process(clk)
-	 begin
-		if rising_edge(clk) then
-			if reset_n_i = '0' then
-				first_rec	<= '0';
-				sg_first_record	<= '0';
-				bmi_rx_first_d <= '0';
-			else
-				
-				bmi_rx_first_d <= bmi_rx_first;
-				sg_first_record	<= rec_fifo_read_data(1);
-				
-				if first_record_sig = '1' then
-					first_rec <= '1';
-				end if;
-				
-				if rx_active = '1' and user_data_rx_fifo_WE = '1' then
-					first_rec <= '0';
-				end if;
-				
-				 
-				
-			end if;
-		end if;
-	 end process;
+	 --process(clk)
+	 --begin
+	--	if rising_edge(clk) then
+-- 			if local_reset_n = '0' then
+-- 				first_rec	<= '0';
+-- 				sg_first_record	<= '0';
+-- 				--bmi_rx_first_d <= '0';
+-- 			else
+-- 				
+-- 				--bmi_rx_first_d <= bmi_rx_first;
+-- 				sg_first_record	<= rec_fifo_read_data(1);
+-- 				
+-- 				if first_record_sig = '1' then
+-- 					first_rec <= '1';
+-- 				end if;
+-- 				
+-- 				if rx_active = '1' and user_data_rx_fifo_WE = '1' then
+-- 					first_rec <= '0';
+-- 				end if;
+-- 				
+-- 				 
+-- 				
+-- 			end if;
+-- 		end if;
+-- 	 end process;
 	 
 	 
 	 
@@ -1854,7 +1647,7 @@ port map
 	 process(clk)
 	 begin
 		if rising_edge(clk) then
-			if reset_n_i = '0' then
+			if local_reset_n = '0' then
 				sg_last_record	<= '0';
 			else
 				if  rec_fifo_dav = '1' then
@@ -1868,9 +1661,9 @@ port map
 	 end process;
 	 
 	 
-	 bmi_rx_pending_o(log2(PCIE_CORE_DATA_WIDTH/8)-1 downto 0) <= (others => '0');
-	 bmi_rx_pending_o(log2(PCIE_CORE_DATA_WIDTH/8)+USER_FIFO_DEPTH_LOG2 downto log2(PCIE_CORE_DATA_WIDTH/8)) <=	user_data_rx_fifo_wc(USER_FIFO_DEPTH_LOG2 downto 0);
-	 bmi_rx_pending_o(bmi_rx_pending_o'high downto log2(PCIE_CORE_DATA_WIDTH/8)+USER_FIFO_DEPTH_LOG2+1) <= (others => '0');
+	 --bmi_rx_pending_o(log2(PCIE_CORE_DATA_WIDTH/8)-1 downto 0) <= (others => '0');
+	 --bmi_rx_pending_o(log2(PCIE_CORE_DATA_WIDTH/8)+USER_FIFO_DEPTH_LOG2 downto log2(PCIE_CORE_DATA_WIDTH/8)) <=	user_data_rx_fifo_wc(USER_FIFO_DEPTH_LOG2 downto 0);
+	 --bmi_rx_pending_o(bmi_rx_pending_o'high downto log2(PCIE_CORE_DATA_WIDTH/8)+USER_FIFO_DEPTH_LOG2+1) <= (others => '0');
 	 
 	sg_transfer_size 				<=  sg_rec(95 downto 64);
 	sg_dir							<= DIRECTION; --sg_rec(0);
@@ -1895,7 +1688,7 @@ port map
 									& x"00000000"
 									& x"00000000"
 									& x"00000000"
-									& x"0000" & dbg_out & '0' & dbg_out_state & "00" & dbg0_reg;
+									& x"00000" &  stat_int_dbg_out & "00" & dbg0_reg;
 	
 	--(others => '0');
 	

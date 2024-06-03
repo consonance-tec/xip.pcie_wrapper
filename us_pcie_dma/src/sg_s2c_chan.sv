@@ -439,7 +439,7 @@ end
  assign read_reg_array[0] = {30'b0 ,state, 1'b0};
  assign read_reg_array[1] = bm_req_address[31:0];  
  assign read_reg_array[2] = bm_req_address[63:31];
- assign read_reg_array[3] = dbg_word[31:0];    
+ assign read_reg_array[3] = {dbg_word[31:0]};    
 
 
 always @(posedge s_axi_clk) 

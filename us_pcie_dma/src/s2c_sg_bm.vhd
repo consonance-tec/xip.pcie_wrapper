@@ -437,6 +437,7 @@ port
 	rx_active				: in  std_logic;
 	rx_be_i					: in  std_logic_vector((PCIE_CORE_DATA_WIDTH/8)-1 downto 0);
 
+	dbg_out					: out std_logic_vector(3 downto 0);
 	desc_low_0				: in std_logic_vector(31 downto 0);
 	desc_low_1				: in std_logic_vector(31 downto 0);
 	desc_low_2				: in std_logic_vector(31 downto 0);
@@ -513,7 +514,7 @@ constant GET_DATA_REQ	: std_logic_vector(7 downto 0) := x"04";
 
 signal expected_rec_add	: std_logic_vector(31 downto 0);
 
-
+signal stat_int_dbg_out					: std_logic_vector(3 downto 0);     
 
 -- entity port signals:
 -- in
@@ -2054,6 +2055,7 @@ port map
 	rx_active				=> rx_active_i,				
 	rx_be_i					=> rx_be_i,
 
+	dbg_out					=> stat_int_dbg_out,
 
 	desc_low_0				=> desc_low_0,
 	desc_low_1				=> desc_low_1,
@@ -2065,11 +2067,6 @@ port map
 	desc_low_7				=> desc_low_7,
 	desc_low_8				=> desc_low_8,
 	desc_low_9				=> desc_low_9
-	
-	
-
-  		      
-
     		
   
 	);
@@ -2323,7 +2320,7 @@ end generate;
 									& x"00000000"
 									& x"00000000"
 									& x"00000000"
-									& x"0000" & dbg_out & un_expected_seq_id & dbg_out_state & "00" & dbg0_reg;
+									& x"00000" & stat_int_dbg_out & "00" & dbg0_reg;
 	
 	--(others => '0');
 	

@@ -14,7 +14,9 @@ module sg_s2c_chan #
   	parameter AXI_ID_WIDTH                   		= 8,
   	parameter AXI_ADDR_WIDTH                 		= 16,
   	parameter AXI_DATA_WIDTH                 		= 32,
-  	parameter AXI_STRB_WIDTH                 		= AXI_DATA_WIDTH/8
+  	parameter AXI_STRB_WIDTH                 		= AXI_DATA_WIDTH/8,
+  	
+  	parameter LOG2_OF_DATA_WIDTH					= $clog2(PCIE_CORE_DATA_WIDTH/8)
  
 )
 (
@@ -99,8 +101,8 @@ module sg_s2c_chan #
     
 );
 
-localparam NUM_OF_REGISTERS = 5;
-localparam C_AXI_ADDR_WIDTH = 4;     
+localparam NUM_OF_REGISTERS = 16;
+localparam C_AXI_ADDR_WIDTH = 8;     
 localparam C_AXI_DATA_WIDTH = 32;    
 localparam ADDR_VADID_BITS  = 20; 
 
@@ -156,6 +158,15 @@ wire bm_req;
 wire bm_rdy;
 wire [255:0] dbg_word;
 
+wire [31:0] bm_transfer_size; 
+wire bm_transfer_size_valid;
+
+
+reg [12:0] max_read_req_size_overwrite;
+reg	max_read_req_over_write_valid;
+
+reg [9:0] [31:0]log_desc;
+
 axi_reg_file #(                                                              
  .C_AXI_ADDR_WIDTH 	(C_AXI_ADDR_WIDTH),                                               
  .C_AXI_DATA_WIDTH 	(C_AXI_DATA_WIDTH),
@@ -209,7 +220,8 @@ s2c_sg_bm #
 	.ONE_USEC_PER_BUS_CYCLE 				(ONE_USEC_PER_BUS_CYCLE), 				          
 	.SWAP_ENDIAN			 				(SWAP_ENDIAN),			 				                  
 	.MAX_USER_RX_REQUEST_SIZE 				(MAX_USER_RX_REQUEST_SIZE), 				        
-	.NUM_NUM_OF_USER_RX_PENDINNG_REQUEST 	(NUM_NUM_OF_USER_RX_PENDINNG_REQUEST)               
+	.NUM_NUM_OF_USER_RX_PENDINNG_REQUEST 	(NUM_NUM_OF_USER_RX_PENDINNG_REQUEST),  
+	.USER_SIGNALS_SAMPLE					(0)             
 )
 s2c_sg_bm_i
 ( 
@@ -232,6 +244,11 @@ s2c_sg_bm_i
 	.bm_stop_i					(bm_stop),
 	.state_o					(state),
 	.bm_req_address_i			(bm_req_address),	
+	
+	.max_read_req_size_overwrite		(max_read_req_size_overwrite),
+	.max_read_req_over_write_valid	(max_read_req_over_write_valid),
+	
+	
 
 	.stop_req_pending_o			(stop_req_pending),
 	.stop_rq_ack_i				(stop_rq_ack),
@@ -277,8 +294,8 @@ s2c_sg_bm_i
 	.bm_rdy_i			   			(bm_rdy),
 	.context_o						(mrd_req_context),
 	                            	
-    .bm_transfer_size_o         	(), 
-    .bm_transfer_size_valid_o   	(),
+  .bm_transfer_size_o         	(bm_transfer_size), 
+  .bm_transfer_size_valid_o   	(bm_transfer_size_valid),
   	                            	
 	                            	
 	.bm_packet_ack_i				(1'b0),
@@ -319,7 +336,20 @@ s2c_sg_bm_i
                                 	
 	.dbg_signal_o					(),
 	.dbg0_reg_0						(),
-	.dbg_word_o						(dbg_word)
+	.dbg_word_o						(dbg_word),
+	
+	.desc_low_0						(log_desc[0]),
+	.desc_low_1						(log_desc[1]),
+	.desc_low_2						(log_desc[2]),
+	.desc_low_3						(log_desc[3]),
+	.desc_low_4						(log_desc[4]),
+	.desc_low_5						(log_desc[5]),
+	.desc_low_6						(log_desc[6]),
+	.desc_low_7						(log_desc[7]),
+	.desc_low_8						(log_desc[8]),
+	.desc_low_9						(log_desc[9])	
+	
+	
 );
 
 wire [12:0] mrd_req_burst_len;
@@ -381,6 +411,22 @@ end
 
 always @(posedge s_axi_clk) 
 begin
+		if(~s_axi_rstn)
+		begin
+			max_read_req_size_overwrite <= 13'b0;
+			max_read_req_over_write_valid <= 1'b0;
+		end
+  	else if(reg_valid && reg_index == 5)
+  	begin
+			max_read_req_size_overwrite <= reg_val[12:0];
+			max_read_req_over_write_valid <= 1'b1;
+  	end
+end 
+
+	
+
+always @(posedge s_axi_clk) 
+begin
 	if(reg_valid && reg_index == 1)
 		bm_req_address[31:0] = reg_val;
 		
@@ -393,6 +439,31 @@ end
  assign read_reg_array[0] = {30'b0 ,state, 1'b0};
  assign read_reg_array[1] = bm_req_address[31:0];  
  assign read_reg_array[2] = bm_req_address[63:31];
- assign read_reg_array[3] = dbg_word[31:0];                                                                  
+ assign read_reg_array[3] = {dbg_word[31:0]};    
+
+
+always @(posedge s_axi_clk) 
+begin
+	if(reg_valid && reg_index == 6)
+		log_desc[0] <= reg_val;  
+	if(reg_valid && reg_index == 7)
+		log_desc[1] <= reg_val;  
+	if(reg_valid && reg_index == 8)
+		log_desc[2] <= reg_val;  
+	if(reg_valid && reg_index == 9)
+		log_desc[3] <= reg_val;  
+	if(reg_valid && reg_index == 10)
+		log_desc[4] <= reg_val;  
+	if(reg_valid && reg_index == 11)
+		log_desc[5] <= reg_val;  
+	if(reg_valid && reg_index == 12)
+		log_desc[6] <= reg_val;  
+	if(reg_valid && reg_index == 13)
+		log_desc[7] <= reg_val;  
+	if(reg_valid && reg_index == 14)
+		log_desc[8] <= reg_val;
+	if(reg_valid && reg_index == 15)
+		log_desc[9] <= reg_val; 
+end
                                                                                         
 endmodule

@@ -307,7 +307,7 @@ port
 	rx_active				: in  std_logic;
 	rx_be_i					: in  std_logic_vector((PCIE_CORE_DATA_WIDTH/8)-1 downto 0);
 
-	
+	dbg_out					: out std_logic_vector(3 downto 0);
 	desc_low_0				: in std_logic_vector(31 downto 0);
 	desc_low_1				: in std_logic_vector(31 downto 0);
 	desc_low_2				: in std_logic_vector(31 downto 0);
@@ -643,6 +643,7 @@ signal prev_desc_req : std_logic_vector(63 downto 0);
 signal flush_out_buffers : std_logic;
 signal flush_out  : std_logic;
 
+signal stat_int_dbg_out					: std_logic_vector(3 downto 0);
 --signal last_cycle_in_transfer : std_logic;
 
 --signal next_user_data_rx_fifo_Wd : std_logic_vector(31 downto 0);
@@ -1439,6 +1440,7 @@ port map
 	rx_active				=> rx_active_i,				
 	rx_be_i					=> rx_be_i,
 
+	dbg_out					=> stat_int_dbg_out,
 
 	desc_low_0				=> (desc_low_0),
 	desc_low_1				=> (desc_low_1),
@@ -1686,7 +1688,7 @@ port map
 									& x"00000000"
 									& x"00000000"
 									& x"00000000"
-									& x"0000" & dbg_out & '0' & dbg_out_state & "00" & dbg0_reg;
+									& x"00000" &  stat_int_dbg_out & "00" & dbg0_reg;
 	
 	--(others => '0');
 	

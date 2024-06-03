@@ -76,6 +76,7 @@ port
 	rx_active				: in  std_logic;
 	rx_be_i					: in  std_logic_vector((PCIE_CORE_DATA_WIDTH/8)-1 downto 0)	;
 	
+	dbg_out					: out std_logic_vector(3 downto 0);
 	
 	desc_low_0				: in std_logic_vector(31 downto 0);
 	desc_low_1				: in std_logic_vector(31 downto 0);
@@ -1227,7 +1228,8 @@ end generate;
  		end if;
  	end process;	
 	
-  	
+  	dbg_out <= dbg_reg;
+	
 end arc;
 
 	
