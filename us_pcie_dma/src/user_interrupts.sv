@@ -44,20 +44,20 @@ module user_interrupts #
         
 	input  wire [NUM_OF_INTERRUPTS-1:0] 	int_req_in,
 	output reg 	[NUM_OF_INTERRUPTS-1:0] 	int_req
-    
+   
     
 );
 
 localparam NUM_OF_REGISTERS_PER_INT = 2;
 localparam NUM_OF_REGISTERS = NUM_OF_REGISTERS_PER_INT*NUM_OF_INTERRUPTS;
 
-reg [NUM_OF_REGISTERS-1:0] [31:0] read_reg_array;
+(* keep = "true" *) reg [NUM_OF_REGISTERS-1:0] [31:0] read_reg_array;
 
 wire [31:0] reg_val;                                                      
 wire [7:0] reg_index;                                                     
 wire reg_valid;  
 
-reg [NUM_OF_REGISTERS-1:0] [7:0] int_cnt;                                                          
+(* keep = "true" *) reg [NUM_OF_REGISTERS-1:0] [7:0] int_cnt;                                                          
 
 
 axi_reg_file #(                                                              

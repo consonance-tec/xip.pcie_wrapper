@@ -29,7 +29,7 @@ module cosn_dma_us_top # (
     
   parameter C_DATA_WIDTH 			= 256,
   parameter AXI4_CQ_TUSER_WIDTH     = 88,
-  parameter AXI4_RQ_TUSER_WIDTH     = 60,
+  parameter AXI4_RQ_TUSER_WIDTH     = 62,
   parameter AXI4_RC_TUSER_WIDTH     = 75,
   parameter KEEP_WIDTH   			= C_DATA_WIDTH/32,
   
@@ -478,7 +478,9 @@ module cosn_dma_us_top # (
                                                  
  );
  
- localparam 	MAX_NUM_OF_INTERRUPTS	= 8;
+
+ 
+ localparam 	MAX_NUM_OF_INTERRUPTS	= NUM_OF_INTERRUPTS;
  localparam 	MAX_NUM_OF_S2C_CHANNELS	= NUM_OF_S2C_CHAN;
  localparam 	MAX_NUM_OF_C2S_CHANNELS	= NUM_OF_C2S_CHAN;
  localparam 	DATAE 	= 32'h03_0A_07e6;
@@ -534,8 +536,8 @@ module cosn_dma_us_top # (
   wire [31:0] 	bar_2_rd_data;
   
   
-wire [NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS-1:0]	int_req_internal;
-wire [NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS-1:0]	int_ack_internal;
+wire [MAX_NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS-1:0]	int_req_internal;
+wire [MAX_NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS-1:0]	int_ack_internal;
 wire int_req_fifo_full;   
 
 
@@ -554,7 +556,8 @@ wire [7:0]  mrd_tx_tag;
 wire [12:0] mrd_tx_len;
 wire [63:0] mrd_tx_addr;
 
-//WrReq mux <--> sg connection wires	                                                                        
+//WrReq mux <--> sg connection wires	
+wire [MAX_NUM_OF_C2S_CHANNELS-1:0]     c2s_stop;                                                                                                                                                
 wire [MAX_NUM_OF_C2S_CHANNELS-1:0]     mwr_ack;			     
 wire [MAX_NUM_OF_C2S_CHANNELS-1:0]     mwr_req;			     
 wire [13*MAX_NUM_OF_C2S_CHANNELS-1:0]  mwr_burst_len;	 
@@ -585,10 +588,10 @@ wire 		rearbit_sig;
 
 
 //status mux <--> sg  connecting wires
-wire [NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS-1 : 0]     	status_ack;		    
-wire [NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS-1 : 0]     	status_req;		    
-wire [64*(NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS)-1 : 0] status_qword;	
-wire [64*(NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS)-1 : 0] status_addr;	 
+wire [MAX_NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS-1 : 0]     	status_ack;		    
+wire [MAX_NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS-1 : 0]     	status_req;		    
+wire [64*(MAX_NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS)-1 : 0] status_qword;	
+wire [64*(MAX_NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS)-1 : 0] status_addr;	 
 
 wire [MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS-1 : 0]      	tag_request;
 wire [MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS-1 : 0]     	tag_valid; 
@@ -1011,56 +1014,55 @@ always @(posedge usr_clk)
 
 
 
-msi_controller #
-(
-	.NUM_OF_INTERRUPTS (NUM_OF_INTERRUPTS+MAX_NUM_OF_S2C_CHANNELS+MAX_NUM_OF_C2S_CHANNELS),
-  	.AXI_ID_WIDTH      (AXI_ID_WIDTH),
-  	.AXI_ADDR_WIDTH    (AXI_ADDR_WIDTH),
-  	.AXI_DATA_WIDTH    (AXI_DATA_WIDTH),
-  	.AXI_STRB_WIDTH    (AXI_STRB_WIDTH)
-)
-msi_controller_i
-( 
-   	.reset_n_i 	(~usr_rst),
-   	.clk 		(usr_clk),
-   
-   	.int_req 	(int_req_internal),
-   	.int_ack 	(int_ack_internal),
-   	.fifo_full 	(int_req_fifo_full),
-   	
-
-  	.cfg_interrupt_msi_enable  (cfg_interrupt_msi_enable),				                    
-  	.cfg_interrupt_msi_int     (cfg_interrupt_msi_int), 				                         		
-  	.cfg_interrupt_msi_sent    (cfg_interrupt_msi_sent),				                                       
-  	.cfg_interrupt_msi_fail    (cfg_interrupt_msi_fail),
-  	
-	.s_axil_awaddr   	(bar0_s_axi_awaddr[2*AXI_ADDR_WIDTH-1:1*AXI_ADDR_WIDTH]),
-	.s_axil_awprot  	(bar0_s_axi_awprot[2*3-1:1*3]),                          
-	.s_axil_awvalid  	(bar0_s_axi_awvalid[1]),               	        	     
-	.s_axil_awready 	(bar0_s_axi_awready[1]),				            	             
-	.s_axil_wdata    	(bar0_s_axi_wdata[2*AXI_DATA_WIDTH-1:1*AXI_DATA_WIDTH]), 
-	.s_axil_wstrb    	(bar0_s_axi_wstrb[2*AXI_STRB_WIDTH-1:1*AXI_STRB_WIDTH]), 
-	.s_axil_wvalid  	(bar0_s_axi_wvalid[1]),				                  	                              
-	.s_axil_wready  	(bar0_s_axi_wready[1]),				                  	              
+msi_controller #                                                                                                                                                                   
+(                                                                                                                                                                                                  
+	.NUM_OF_INTERRUPTS (MAX_NUM_OF_INTERRUPTS+MAX_NUM_OF_S2C_CHANNELS+MAX_NUM_OF_C2S_CHANNELS),                        
+  	.AXI_ID_WIDTH      (AXI_ID_WIDTH),                                                                             
+  	.AXI_ADDR_WIDTH    (AXI_ADDR_WIDTH),                                                                           
+  	.AXI_DATA_WIDTH    (AXI_DATA_WIDTH),                                                                           
+  	.AXI_STRB_WIDTH    (AXI_STRB_WIDTH)                                                                            
+)                                                                                                                  
+msi_controller_i                                                                                                   
+(                                                                                                                  
+   	.reset_n_i 	(~usr_rst),                                                                                        
+   	.clk 		(usr_clk),                                                                                            
+                                                                                                                   
+   	.int_req 	(int_req_internal),                                                                                
+   	.int_ack 	(int_ack_internal),                                                                                
+   	.fifo_full 	(int_req_fifo_full),                                                                               
+   	                                                                                                               
+                                                                                                                   
+  	.cfg_interrupt_msi_enable  (cfg_interrupt_msi_enable),				                                                    
+  	.cfg_interrupt_msi_int     (cfg_interrupt_msi_int), 				                         		                      
+  	.cfg_interrupt_msi_sent    (cfg_interrupt_msi_sent),				                                                      
+  	.cfg_interrupt_msi_fail    (cfg_interrupt_msi_fail),                                                           
+  	                                                                                                               
+	.s_axil_awaddr   	(bar0_s_axi_awaddr[2*AXI_ADDR_WIDTH-1:1*AXI_ADDR_WIDTH]),                                  
+	.s_axil_awprot  	(bar0_s_axi_awprot[2*3-1:1*3]),                                                            
+	.s_axil_awvalid  	(bar0_s_axi_awvalid[1]),               	        	                                         
+	.s_axil_awready 	(bar0_s_axi_awready[1]),				            	                                                  
+	.s_axil_wdata    	(bar0_s_axi_wdata[2*AXI_DATA_WIDTH-1:1*AXI_DATA_WIDTH]),                                   
+	.s_axil_wstrb    	(bar0_s_axi_wstrb[2*AXI_STRB_WIDTH-1:1*AXI_STRB_WIDTH]),                                   
+	.s_axil_wvalid  	(bar0_s_axi_wvalid[1]),				                  	                                             
+	.s_axil_wready  	(bar0_s_axi_wready[1]),				                  	                                             
 	.s_axil_bresp   	(bar0_s_axi_bresp[2*2-1:1*2]),                                                                        
-	.s_axil_bvalid  	(bar0_s_axi_bvalid[1]),            	          	         
-	.s_axil_bready  	(bar0_s_axi_bready[1]),            	          	              
-	.s_axil_araddr   	(bar0_s_axi_araddr[2*AXI_ADDR_WIDTH-1:1*AXI_ADDR_WIDTH]),
-	.s_axil_arprot  	(bar0_s_axi_arprot[2*3-1:1*3]),               	         
-	.s_axil_arvalid 	(bar0_s_axi_arlen[1]),                                   
-	.s_axil_arready 	(bar0_s_axi_arready[1]),          	                     
-	.s_axil_rdata    	(bar0_s_axi_rdata[2*AXI_DATA_WIDTH-1:1*AXI_DATA_WIDTH]),  
-	.s_axil_rresp   	(bar0_s_axi_rresp[2*2-1:1*2]),                           
-	.s_axil_rvalid   	(bar0_s_axi_rvalid[1]),               	                 
-	.s_axil_rready   	(bar0_s_axi_rready[1])                                   
-);
+	.s_axil_bvalid  	(bar0_s_axi_bvalid[1]),            	          	                                            
+	.s_axil_bready  	(bar0_s_axi_bready[1]),            	          	                                            
+	.s_axil_araddr   	(bar0_s_axi_araddr[2*AXI_ADDR_WIDTH-1:1*AXI_ADDR_WIDTH]),                                  
+	.s_axil_arprot  	(bar0_s_axi_arprot[2*3-1:1*3]),               	                                            
+	.s_axil_arvalid 	(bar0_s_axi_arlen[1]),                                                                     
+	.s_axil_arready 	(bar0_s_axi_arready[1]),          	                                                        
+	.s_axil_rdata    	(bar0_s_axi_rdata[2*AXI_DATA_WIDTH-1:1*AXI_DATA_WIDTH]),                                   
+	.s_axil_rresp   	(bar0_s_axi_rresp[2*2-1:1*2]),                                                             
+	.s_axil_rvalid   	(bar0_s_axi_rvalid[1]),               	                                                   
+	.s_axil_rready   	(bar0_s_axi_rready[1])                                                                     
+);                                                                                                                 
 
 
 
 mrd_req_mux #	
 (
-	.NUM_OF_FAST_SG_IN_CHANNLES		(MAX_NUM_OF_C2S_CHANNELS),
-	.NUM_OF_FAST_SG_OUT_CHANNLES 	(MAX_NUM_OF_S2C_CHANNELS)
+	.NUM_OF_SG_CHANNLES		(MAX_NUM_OF_C2S_CHANNELS+MAX_NUM_OF_S2C_CHANNELS)
 )
 mrd_req_mux_i
 (
@@ -1097,6 +1099,8 @@ mwr_req_mux_i
 	.clk_in        	(usr_clk),
 	.rstn          	(~usr_rst),   
 	
+	.stop			(c2s_stop),	
+	
 	.mwr_ack		(mwr_ack),			      
 	.mwr_req		(mwr_req),			      
 	.mwr_burst_len	(mwr_burst_len),	  
@@ -1121,7 +1125,7 @@ mwr_req_mux_i
 
 status_req_mux #	
 (
-	.NUM_OF_SG_CHANNLES	(NUM_OF_INTERRUPTS+NUM_OF_CHANNELS)
+	.NUM_OF_SG_CHANNLES	(MAX_NUM_OF_INTERRUPTS+NUM_OF_CHANNELS)
 )
 status_req_mux
 (
@@ -1482,7 +1486,7 @@ generate
 			.max_read_request_size		(max_read_request_size),
 			
 			// interrupt request signals	
-			.int_gen		(int_req_internal[NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+i]),	
+			.int_gen		(int_req_internal[MAX_NUM_OF_INTERRUPTS+MAX_NUM_OF_C2S_CHANNELS+i]),	
 							 
 			
 			.status_ack		(status_ack[MAX_NUM_OF_C2S_CHANNELS+i]),
@@ -1574,6 +1578,7 @@ generate
 			
 
 		   // TX Dispatcher Interface 
+		    .tx_stop 				(c2s_stop[i]),
 			.tx_arbit_req			(mwr_req[i]),
 			.tx_arbit_grnt			(mwr_ack[i]),
 			.tx_rearbit_req			(rearbit_sig),	
@@ -1600,7 +1605,7 @@ generate
 			.max_read_request_size		(max_read_request_size),
 			
 			// interrupt request signals	
-			.int_gen		(int_req_internal[NUM_OF_INTERRUPTS+i]),	
+			.int_gen		(int_req_internal[MAX_NUM_OF_INTERRUPTS+i]),	
 			
 			.status_ack		(status_ack[i]),
 			.status_req		(status_req[i]),
@@ -1611,12 +1616,29 @@ generate
 	end
 endgenerate
 
+
+wire [MAX_NUM_OF_INTERRUPTS-1:0] int_req;
+
+
+
+assign int_req = 
+{
+	int_req_7,
+	int_req_6,
+	int_req_5,
+	int_req_4,
+	int_req_3,
+	int_req_2,
+	int_req_1,
+	int_req_0	
+};
+
 generate 
 if(NUM_OF_INTERRUPTS > 0)
 
 user_interrupts #
 (
-    .NUM_OF_INTERRUPTS                      (NUM_OF_INTERRUPTS),
+    .NUM_OF_INTERRUPTS                      (MAX_NUM_OF_INTERRUPTS),
 	.AXI_ID_WIDTH                   		(AXI_ID_WIDTH),
 	.AXI_ADDR_WIDTH                 		(AXI_ADDR_WIDTH),
 	.AXI_DATA_WIDTH                 		(AXI_DATA_WIDTH),
@@ -1647,13 +1669,13 @@ user_interrupts_i
 	.s_axil_rvalid   	(bar0_s_axi_rvalid[NUM_OF_CHANNELS+2]),                                     		                                                      
 	.s_axil_rready   	(bar0_s_axi_rready[NUM_OF_CHANNELS+2]),                                                                                             
 	                                                                                                                                                        
-	.status_ack			(status_ack[NUM_OF_INTERRUPTS+NUM_OF_CHANNELS-1:NUM_OF_CHANNELS]),                                                                                                           
-	.status_req			(status_req[NUM_OF_INTERRUPTS+NUM_OF_CHANNELS-1:NUM_OF_CHANNELS]),                                                                                                           
-	.status_qword 		(status_qword[(NUM_OF_INTERRUPTS+NUM_OF_CHANNELS-1)*64-1:NUM_OF_CHANNELS*64]),                                                                        
-	.status_addr  		(status_addr[(NUM_OF_INTERRUPTS+NUM_OF_CHANNELS-1)*64-1:NUM_OF_CHANNELS*64]),                                                                         
+	.status_ack			(status_ack[MAX_NUM_OF_INTERRUPTS+NUM_OF_CHANNELS-1:NUM_OF_CHANNELS]),                                                                                                           
+	.status_req			(status_req[MAX_NUM_OF_INTERRUPTS+NUM_OF_CHANNELS-1:NUM_OF_CHANNELS]),                                                                                                           
+	.status_qword 		(status_qword[(MAX_NUM_OF_INTERRUPTS+NUM_OF_CHANNELS)*64-1:NUM_OF_CHANNELS*64]),                                                                        
+	.status_addr  		(status_addr[(MAX_NUM_OF_INTERRUPTS+NUM_OF_CHANNELS)*64-1:NUM_OF_CHANNELS*64]),                                                                         
 			
 	.int_req_in			(int_req),
-	.int_req			(int_req_internal[NUM_OF_INTERRUPTS-1:0])
+	.int_req			(int_req_internal[MAX_NUM_OF_INTERRUPTS-1:0])
 );
 endgenerate
                                                 

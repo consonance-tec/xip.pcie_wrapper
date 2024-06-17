@@ -1619,6 +1619,8 @@ endgenerate
 
 wire [MAX_NUM_OF_INTERRUPTS-1:0] int_req;
 
+
+
 assign int_req = 
 {
 	int_req_7,
@@ -1669,8 +1671,8 @@ user_interrupts_i
 	                                                                                                                                                        
 	.status_ack			(status_ack[MAX_NUM_OF_INTERRUPTS+NUM_OF_CHANNELS-1:NUM_OF_CHANNELS]),                                                                                                           
 	.status_req			(status_req[MAX_NUM_OF_INTERRUPTS+NUM_OF_CHANNELS-1:NUM_OF_CHANNELS]),                                                                                                           
-	.status_qword 		(status_qword[(MAX_NUM_OF_INTERRUPTS+NUM_OF_CHANNELS-1)*64-1:NUM_OF_CHANNELS*64]),                                                                        
-	.status_addr  		(status_addr[(MAX_NUM_OF_INTERRUPTS+NUM_OF_CHANNELS-1)*64-1:NUM_OF_CHANNELS*64]),                                                                         
+	.status_qword 		(status_qword[(MAX_NUM_OF_INTERRUPTS+NUM_OF_CHANNELS)*64-1:NUM_OF_CHANNELS*64]),                                                                        
+	.status_addr  		(status_addr[(MAX_NUM_OF_INTERRUPTS+NUM_OF_CHANNELS)*64-1:NUM_OF_CHANNELS*64]),                                                                         
 			
 	.int_req_in			(int_req),
 	.int_req			(int_req_internal[MAX_NUM_OF_INTERRUPTS-1:0])
