@@ -36,7 +36,7 @@ module full_dup_tester #
   	input                      			 	s_axis_tlast,
   	input                      			 	s_axis_tvalid,
   	input              [32:0]  			 	s_axis_tuser,
-  	output                      		 	s_axis_tready,
+  	output  reg                    		 	s_axis_tready,
   	
     //AXI Lite Registes target for W/R from the host
     input  wire [AXI_ADDR_WIDTH-1:0]    	s_axil_awaddr,              
@@ -62,13 +62,18 @@ module full_dup_tester #
 
 
 //reg map:
-localparam C2S_CTRL 		= 0;
-localparam INT_GEN			= 1;
-localparam INT_PERIOD 		= 2;
-localparam C2S_PCKET_SIZE 	= 3;
-localparam BURST_SIZE		= 4;
-localparam INTER_PACKET_GAP	= 5;
-localparam INTER_BURST_GAP  = 6;
+localparam C2S_CTRL 				= 0;
+localparam INT_GEN					= 1;
+localparam INT_PERIOD 				= 2;
+localparam C2S_PCKET_SIZE 			= 3;
+localparam BURST_SIZE				= 4;
+localparam INTER_PACKET_GAP			= 5;
+localparam INTER_BURST_GAP  		= 6;
+localparam S2C_READY_VALED_DUR  	= 7;
+localparam S2C_NOT_READY_VALED_DUR  = 8;
+localparam S2C_STALL  				= 9;
+localparam S2C_LAST_COUNT			= 10;
+localparam S2C_ERROR_CONT			= 11;
 
 
 localparam NUM_OF_REGISTERS = 16;
@@ -98,6 +103,17 @@ reg [23:0] c2s_bytes_left;
 reg [31:0] inter_packet_gap_left;
 reg [23:0] bust_left;
 reg [31:0] inter_burst_left;
+
+reg s2c_stall;
+reg [31:0] s2c_ready_valid_duration;
+reg [31:0] s2c_not_ready_valid_duration;
+
+reg [31:0] s2c_ready_valid_duration_cnt;
+reg [31:0] s2c_not_ready_valid_duration_cnt;
+
+reg s2c_ready_state;
+reg [31:0] s2c_cycles_count;
+reg is_first_s2c_cycle;
 
 
 ////////////////////////////////////////// c2s  ////////////////////////////////
@@ -331,8 +347,29 @@ begin
 		inter_burst_gap_size <= reg_val;
 end	
 
+always @(posedge s_axi_clk) 
+begin
+	if(~s_axi_rstn)
+		s2c_stall <= 1'b0;
+	else if(reg_valid && reg_index == S2C_STALL)
+		s2c_stall <= reg_val[0];
+end	
 
+always @(posedge s_axi_clk) 
+begin
+	if(~s_axi_rstn)
+		s2c_ready_valid_duration <= 32'h00000000;
+	else if(reg_valid && reg_index == S2C_READY_VALED_DUR)
+		s2c_ready_valid_duration  <= reg_val;
+end	
 
+always @(posedge s_axi_clk) 
+begin
+	if(~s_axi_rstn)
+		s2c_not_ready_valid_duration <= 32'h00000000;
+	else if(reg_valid && reg_index == S2C_NOT_READY_VALED_DUR)
+		s2c_not_ready_valid_duration  <= reg_val;
+end	
 
 		
 always @(posedge s_axi_clk) 
@@ -342,16 +379,119 @@ begin
 		int_gen <= 1'b1;
 end	
 
+
 ////////////////////////////////////////// s2c  ///////////////////////////////////////////////////////
 
-assign s_axis_tready = 1'b1;
+
+
+
+always @(posedge s_axi_clk) 
+begin
+	if(~s_axi_rstn)
+	begin
+		s2c_cycles_count <= 32'h00000000;
+		is_first_s2c_cycle <= 1'b1;
+	end
+	else
+	begin
+		if(s_axis_tready && s_axis_tvalid && is_first_s2c_cycle)
+			s2c_cycles_count <= 32'h00000001;
+		else if(s_axis_tready && s_axis_tvalid)
+			s2c_cycles_count <= s2c_cycles_count+1;
+			
+		if(s_axis_tready && s_axis_tvalid && s_axis_tlast)
+			is_first_s2c_cycle <= 1'b1;
+		else if(s_axis_tready && s_axis_tvalid)
+			is_first_s2c_cycle <= 1'b0;
+	end
+end
+
+always @(posedge s_axi_clk)
+	s_axis_tready <= 1'b1;
+
+//always @(posedge s_axi_clk) 
+//begin
+//	if(~s_axi_rstn)
+//	begin
+//		s_axis_tready <= 1'b0;
+//		s2c_ready_state <= 1'b0;
+//		s2c_ready_valid_duration_cnt <= 32'h00000001;
+//		s2c_not_ready_valid_duration_cnt <= 32'h00000001;
+//	end
+//	else
+//	begin
+//		s_axis_tready <= 1'b0;
+//		s2c_ready_valid_duration_cnt 		<= s2c_ready_valid_duration_cnt;
+//		s2c_not_ready_valid_duration_cnt 	<= s2c_not_ready_valid_duration_cnt;
+//		s2c_ready_state <= s2c_ready_state;
+//		
+//		if(s2c_ready_state == 1'b0 && ~s2c_stall)
+//		begin
+//			s2c_not_ready_valid_duration_cnt <= 32'h00000001;
+//			s_axis_tready <= 1'b1;
+//			if(s_axis_tready && s_axis_tvalid)
+//				s2c_ready_valid_duration_cnt <= s2c_ready_valid_duration_cnt+1;
+//					
+//			if(s_axis_tvalid && s_axis_tready && (s2c_ready_valid_duration_cnt == s2c_ready_valid_duration-1) && 
+//															s2c_not_ready_valid_duration != 32'h00000000)
+//				s2c_ready_state <= 1'b1;
+//		end
+//		else if(~s2c_stall)
+//		begin
+//			s2c_ready_valid_duration_cnt <= 32'h00000001;
+//			if(s_axis_tvalid)
+//				s2c_not_ready_valid_duration_cnt <= s2c_not_ready_valid_duration_cnt+1;
+//				
+//			if(s_axis_tvalid && (s2c_not_ready_valid_duration_cnt  == s2c_not_ready_valid_duration-1))
+//				s2c_ready_state <= 1'b0;
+//		end
+//	end
+//end
+
+
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////
+reg [31:0] expected_dw;
+reg	s2c_data_error;
+
 always @(posedge s_axi_clk) 
 begin
 	if(reg_valid)
 		reg_array[reg_index] <= reg_val;
-end			
+		
+	reg_array[S2C_LAST_COUNT] <= s2c_cycles_count;	
+	
+	if(s2c_data_error)
+			reg_array[S2C_ERROR_CONT] <= reg_array[S2C_ERROR_CONT]+1;
+end	
+
+
+
+
+		
+always @(posedge s_axi_clk) 
+begin
+	if(~s_axi_rstn)
+	begin
+		expected_dw <= 32'h00000000;
+		s2c_data_error <= 1'b0;
+	end 
+	else
+	begin
+		s2c_data_error <= 1'b0;
+		if(s_axis_tvalid && s_axis_tready && s_axis_tdata[31:0] != expected_dw)
+			s2c_data_error <= 1'b1;
+			
+		//if(s_axis_tvalid && s_axis_tready)
+		//	expected_dw <= s_axis_tdata[31:0]+4;
+			
+		if(s_axis_tvalid && s_axis_tready && s_axis_tlast && (expected_dw == 32'h00000009))	
+			expected_dw <= 32'h00000000;
+		else if(s_axis_tvalid && s_axis_tready && s_axis_tlast)	
+			expected_dw <= expected_dw+1;
+		
+	end
+end	
                                                                                         
-                                                                                        
+   
 endmodule
